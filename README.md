@@ -1,12 +1,5 @@
 # Borrowed Models & Synthetic Pre-Training: Efficient Alternatives to Domain-Specific Foundation Models
 
-**Jianhao Wu**<sup>1,†</sup> [![ORCID](https://img.shields.io/badge/ORCID-0009--0000--7431--7885-A6CE39?logo=orcid&logoColor=white)](https://orcid.org/0009-0000-7431-7885) · **Mariel Pettee**<sup>1,2</sup> [![ORCID](https://img.shields.io/badge/ORCID-0000--0001--9208--3218-A6CE39?logo=orcid&logoColor=white)](https://orcid.org/0000-0001-9208-3218)
-
-<sup>1</sup> Department of Physics, University of Wisconsin–Madison, Madison, Wisconsin, USA    
-<sup>2</sup> Data Science Institute, University of Wisconsin–Madison, Madison, Wisconsin, USA   
-<sup>†</sup> Corresponding author: [jianhao.wu@wisc.edu](mailto:jianhao.wu@wisc.edu) (J.W.)
-
-
 Astrophysicists cannot always find suitable in-domain foundation models to accelerate their model training. Then there can be two ways: **to borrow** foundation models from other physics domains like high energy physics, or **to pre-train light-weighted** foundation models with synthetic datasets like geometry shapes.
 
 Can both ways work (at least better than from scratch)? Which one should be our preference? We answered these two questions by a simple stellar stream benchmark task in astrophysics: using the final spatial positions of stars, to infer the initial progenitor mass of the stellar stream.
