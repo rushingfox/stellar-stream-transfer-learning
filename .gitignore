@@ -1,0 +1,96 @@
+# files
+jobout.o*
+joberr.o*
+*.pth
+*.pt
+*.out
+*.err
+*.h5
+*.hdf5
+# dirs
+scripts/logs/
+.ipynb_checkpoints/
+__pycache__/
+# build artifact from `pip install -e .`
+*.egg-info/
+
+# experiment run folders (<target_columns>_<dataset_size>/)
+3d_*/
+4d_*/
+6d_*/
+
+# ...except: track the small per-run result files (loss curves, shared-test
+# predictions) even though the run folders themselves are gitignored above --
+# these are what let the reproduce_main_figure notebook rebuild the paper's
+# figures without needing to retrain/re-evaluate anything. A parent directory
+# must be un-ignored before git will even look for files inside it, hence the
+# directory-level negations before the file-level ones.
+!3d_*/
+!4d_*/
+!6d_*/
+!3d_*/**/
+!4d_*/**/
+!6d_*/**/
+!3d_*/**/*.csv
+!3d_*/**/*.npz
+!4d_*/**/*.csv
+!4d_*/**/*.npz
+!6d_*/**/*.csv
+!6d_*/**/*.npz
+# Un-ignoring the directories above makes every OTHER file inside them
+# visible again too (png/json/txt/..., not just csv/npz), since those
+# extensions were never ignored by a rule of their own -- they only rode
+# along with the directory being ignored. gitignore has no "files only, not
+# directories" wildcard, so the directories can't be blanket-reignored
+# without re-breaking traversal; re-ignore each unwanted extension by name
+# instead (checked against everything currently under 3d_*/4d_*/6d_* --
+# revisit this list if a run ever produces a new file type).
+3d_*/**/*.png
+3d_*/**/*.json
+3d_*/**/*.txt
+3d_*/**/*.npy
+4d_*/**/*.png
+4d_*/**/*.json
+4d_*/**/*.txt
+4d_*/**/*.npy
+6d_*/**/*.png
+6d_*/**/*.json
+6d_*/**/*.txt
+6d_*/**/*.npy
+
+# ...except: track the loss/R^2 curves from geometric proxy PRETRAINING
+# specifically (one run per proxy, not one per seed) -- these demonstrate
+# the pretraining itself converged well. Scoped to omnilearned_proxy_pretrain_1x4/
+# so it doesn't also pull in the same-named files from every finetune run
+# (13 models x 3 sizes x 3 seeds), which would be redundant with the
+# already-tracked loss_history.csv the main figure is built from.
+!3d_*/omnilearned_proxy_pretrain_1x4/**/loss_curve.png
+!3d_*/omnilearned_proxy_pretrain_1x4/**/r2_curve.png
+
+# ...except: track hparams.json (written by the OmniLearned CLI itself --
+# the complete, authoritative record of every training hyperparameter, not
+# just the ones we overrode) from every pretrain AND finetune run. Unlike
+# the curve pngs above this is small (~4KB/file) and identical across a
+# model's 3 seeds, so it's tracked everywhere rather than scoped down --
+# lets evaluation/hyperparams.tex's hand-copied values be checked against
+# the actual runs. invocation.txt (our own runner scripts' record of the
+# submitted command) is deliberately NOT tracked here -- redundant with
+# hparams.json for the purpose of verifying hyperparameters.
+!3d_*/**/hparams.json
+!4d_*/**/hparams.json
+!6d_*/**/hparams.json
+
+# raw data folders
+raw_data*/
+
+# literature PDFs
+literature/
+
+# macOS Finder metadata
+.DS_Store
+
+# Codex
+.codex
+
+# One-off local cleanup script used when building this branch from 4gpu
+clean_for_main.sh

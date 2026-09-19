@@ -1,0 +1,200 @@
+{
+  "omnilearned_params": {
+    "outdir": {
+      "value": "./",
+      "cli_default": false
+    },
+    "pretrain_tag": {
+      "value": "bounded_ellipsoid_a",
+      "cli_default": false
+    },
+    "dataset": {
+      "value": "streams",
+      "cli_default": false
+    },
+    "path": {
+      "value": "../../data",
+      "cli_default": false
+    },
+    "fine_tune": {
+      "value": true,
+      "cli_default": false
+    },
+    "num_feat": {
+      "value": 3,
+      "cli_default": false
+    },
+    "local_interaction": {
+      "value": true,
+      "cli_default": false
+    },
+    "num_coord": {
+      "value": 3,
+      "cli_default": false
+    },
+    "interaction_type": {
+      "value": "astro",
+      "cli_default": false
+    },
+    "num_classes": {
+      "value": 1,
+      "cli_default": false
+    },
+    "mode": {
+      "value": "regression",
+      "cli_default": false
+    },
+    "batch": {
+      "value": 4,
+      "cli_default": false
+    },
+    "epoch": {
+      "value": 50,
+      "cli_default": false
+    },
+    "model_size": {
+      "value": "small",
+      "cli_default": false
+    },
+    "save_tag": {
+      "value": "",
+      "cli_default": true
+    },
+    "wandb": {
+      "value": false,
+      "cli_default": true
+    },
+    "resuming": {
+      "value": false,
+      "cli_default": true
+    },
+    "size": {
+      "value": "small",
+      "cli_default": true
+    },
+    "interaction": {
+      "value": false,
+      "cli_default": true
+    },
+    "K": {
+      "value": 10,
+      "cli_default": true
+    },
+    "conditional": {
+      "value": false,
+      "cli_default": true
+    },
+    "num_cond": {
+      "value": 3,
+      "cli_default": true
+    },
+    "use_pid": {
+      "value": false,
+      "cli_default": true
+    },
+    "pid_idx": {
+      "value": 4,
+      "cli_default": true
+    },
+    "pid_dim": {
+      "value": 9,
+      "cli_default": true
+    },
+    "use_add": {
+      "value": false,
+      "cli_default": true
+    },
+    "num_add": {
+      "value": 4,
+      "cli_default": true
+    },
+    "zero_add": {
+      "value": false,
+      "cli_default": true
+    },
+    "use_clip": {
+      "value": false,
+      "cli_default": true
+    },
+    "use_event_loss": {
+      "value": false,
+      "cli_default": true
+    },
+    "num_gen_classes": {
+      "value": 1,
+      "cli_default": true
+    },
+    "iterations": {
+      "value": -1,
+      "cli_default": true
+    },
+    "warmup_epoch": {
+      "value": 0,
+      "cli_default": true
+    },
+    "use_amp": {
+      "value": false,
+      "cli_default": true
+    },
+    "clip_inputs": {
+      "value": false,
+      "cli_default": true
+    },
+    "optim": {
+      "value": "lion",
+      "cli_default": true
+    },
+    "sched": {
+      "value": "cosine",
+      "cli_default": true
+    },
+    "b1": {
+      "value": 0.95,
+      "cli_default": true
+    },
+    "b2": {
+      "value": 0.98,
+      "cli_default": true
+    },
+    "lr": {
+      "value": 5e-05,
+      "cli_default": true
+    },
+    "lr_factor": {
+      "value": 1.0,
+      "cli_default": true
+    },
+    "wd": {
+      "value": 0.0,
+      "cli_default": true
+    },
+    "nevts": {
+      "value": -1,
+      "cli_default": true
+    },
+    "attn_drop": {
+      "value": 0.0,
+      "cli_default": true
+    },
+    "mlp_drop": {
+      "value": 0.0,
+      "cli_default": true
+    },
+    "feature_drop": {
+      "value": 0.0,
+      "cli_default": true
+    },
+    "num_workers": {
+      "value": 16,
+      "cli_default": true
+    }
+  },
+  "slurm": {
+    "run_idx": "1",
+    "job_id": "56018956",
+    "array_job_id": "56018954",
+    "array_task_id": "1",
+    "ntasks": "1",
+    "nodelist": "nid001548"
+  }
+}

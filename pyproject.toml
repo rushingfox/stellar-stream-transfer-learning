@@ -1,0 +1,34 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "stream-transfer-learning"
+version = "0.1.0"
+description = "Environment dependencies for Stream_Transfer_Learning. Does NOT include omnilearned -- that is installed separately as an editable local clone (see README)."
+requires-python = ">=3.11"
+dependencies = [
+    "numpy",
+    "scipy",
+    "pandas",
+    # <3.11: matplotlib 3.11 added axes3d.depthshade_minalpha (default 0.3),
+    # which multiplies into the alpha already set on the 3D proxy point clouds
+    # and washes them out. Pinned so the published figures stay reproducible.
+    "matplotlib<3.11",
+    "seaborn",
+    "h5py",
+    "scikit-learn",
+    "torch",
+    "torchinfo",
+    "tqdm",
+    "astropy",
+    "colossus",
+    "gala==1.9.1",
+    "ipykernel",
+]
+
+# No importable package of our own -- src/ is used via sys.path.insert / running
+# scripts directly, not `import stream_transfer_learning`. This pyproject.toml
+# exists only so `pip install -e .` can install every dependency in one command.
+[tool.setuptools]
+packages = []

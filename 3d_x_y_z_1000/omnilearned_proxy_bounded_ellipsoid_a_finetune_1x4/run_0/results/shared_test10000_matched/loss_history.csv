@@ -1,0 +1,2 @@
+Epoch,Val_Loss,Test_Loss,Test_Loss_Mean,Test_Loss_WinRate,Test_Loss_Stream_Std
+1,-0.2404954433441162,-0.2404954433441162,2.379582405090332,0.579,12.8970308303833
