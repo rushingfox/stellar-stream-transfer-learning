@@ -45,8 +45,8 @@ if [[ ! -d "${run_dir}/data/streams/train" ]]; then
     exit 1
 fi
 
-# Look up feat_num / num_classes per proxy — all seven unified 1-target
-# proxies map to num_classes=1. Keep this in sync if new proxies are added.
+# Look up feat_num / num_classes per proxy — every unified 1-target
+# proxy maps to num_classes=1. Keep this in sync if new proxies are added.
 case "${target_column}" in
     3d_proxy_cube)                       num_feat=3; num_classes=1 ;;
     3d_proxy_bounded_ball)                num_feat=3; num_classes=1 ;;
@@ -55,6 +55,8 @@ case "${target_column}" in
     3d_proxy_bounded_ellipsoid_a)          num_feat=3; num_classes=1 ;;
     3d_proxy_box_a)                        num_feat=3; num_classes=1 ;;
     3d_x_y_z_eigenvalues_lambda1)          num_feat=3; num_classes=1 ;;
+    3d_x_y_z_eigenvalues_lambda2)          num_feat=3; num_classes=1 ;;
+    3d_x_y_z_eigenvalues_lambda3)          num_feat=3; num_classes=1 ;;
     *) echo "Error: unknown TARGET_COLUMN='${target_column}'" >&2; exit 1 ;;
 esac
 

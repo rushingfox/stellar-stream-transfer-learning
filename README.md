@@ -49,29 +49,43 @@ module load texlive/2024
 
 ### Stream Simulations
 
+Firstly, we need to do the simulation with GALA:
 ```
 cd /path/to/Stream_Transfer_Learning
 cd scripts
 NUM_STREAMS_LIST="300 1000 10000" bash prepare_raw_data_submission.sh
 ```
-
-### Geometry datasets
-
-Firstly, to generate the original 7 datasets (6 geometry shapes + 1 stream eigenvalue dataset adapted from the stream simulations):
+Secondly, we need to make the raw simulation dataset suitable for training:
 ```
 cd /path/to/Stream_Transfer_Learning
 cd scripts
-DATASET_SIZES="10000" bash prepare_data_proxy_pretrain.sh
+TARGET_COLUMNS="3d_x_y_z" bash prepare_data_omnilearned.sh
+TARGET_COLUMNS="3d_x_y_z" bash prepare_data_baseline.sh
 ```
 
-However, some may have in total 3 targets while some only have 1 target. To be consistent, we adopted the long axis of the anisotropic shapes as the only regression target:
+### Geometry datasets
+
+Firstly, to generate the 6 geometry shapes:
+```
+cd /path/to/Stream_Transfer_Learning
+cd scripts
+DATASET_SIZES="10000" TARGET_COLUMNS="3d_proxy_cube 3d_proxy_bounded_ball 3d_proxy_gaussian_ball 3d_proxy_ellipsoid 3d_proxy_hard_ellipsoid 3d_proxy_box" bash prepare_data_proxy_pretrain.sh
+```
+
+However, some may have in total 3 targets while some only have 1 target. So secondly, to be consistent, we adopted the long axis of the anisotropic shapes as the only regression target:
 ```
 cd /path/to/Stream_Transfer_Learning
 mamba activate stream_transfer_learning
 python src/make_ellipsoid_sigmax_from_ellipsoid.py
 python src/make_bounded_ellipsoid_a_from_hard_ellipsoid.py
 python src/make_box_a_from_box.py
-python src/make_eigen_lambda1_from_eigenvalues.py
+```
+
+Thirdly, we also need to generate the stream eigenvalue dataset adapted from the stream simulations, with the longest axis as regression target:
+```
+cd /path/to/Stream_Transfer_Learning
+mamba activate stream_transfer_learning
+python src/make_eigen_lambda_from_streams.py --index 1
 ```
 
 ## Pre-training the geometry models & fine-tuning and evaluating all the models.

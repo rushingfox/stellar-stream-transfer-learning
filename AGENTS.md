@@ -58,6 +58,14 @@ Experiment results live at `<target_columns>_<dataset_size>/<model>/run_<seed_id
   not used anywhere; treat those as legacy.
 - `target_columns` for the real-stream task is `3d_x_y_z`. The proxy pretraining
   datasets get their own top-level dirs (see below).
+- **Finetune data is shared per size**, in `<target_columns>_<size>/data/`: OmniLearned's
+  `data/streams/{train,val,test}/` (from
+  [scripts/prepare_data_omnilearned.sh](scripts/prepare_data_omnilearned.sh)) and
+  DeepSets' `data/baseline_dataset.h5` (from
+  [scripts/prepare_data_baseline.sh](scripts/prepare_data_baseline.sh)). Every model of a
+  family at that size reads the same copy; only the initial weights differ. The older
+  per-model `baseline/data/` and `baseline_256/data/` copies are byte-identical legacy and
+  no longer read.
 - Path helpers in [src/exp_paths.py](src/exp_paths.py) (`dataset_key`,
   `get_loss_history_csv_path`, …) are the canonical way to construct paths — use them
   rather than f-strings.
@@ -86,13 +94,26 @@ pretraining tasks stay comparable.
 | `3d_proxy_gaussian_ellipsoid_sigmax_10000` | `σ_x` |
 | `3d_x_y_z_eigenvalues_lambda1_10000` | `√λ₁` of the real-stream PCA |
 
-[src/prepare_data.py](src/prepare_data.py) synthesises the **3-target** parents
-(`3d_proxy_box`, `3d_proxy_hard_ellipsoid`, `3d_proxy_ellipsoid`,
-`3d_x_y_z_eigenvalues`); the four `src/make_*_from_*.py` scripts then slice them down to
-the 1-target datasets listed above. Those slicers infer the repo root from
+The six geometries come from [src/prepare_data.py](src/prepare_data.py) via
+[scripts/prepare_data_proxy_pretrain.sh](scripts/prepare_data_proxy_pretrain.sh). Three
+of them are synthesised with **3 targets** (`3d_proxy_box`, `3d_proxy_hard_ellipsoid`,
+`3d_proxy_ellipsoid`), and three `src/make_*_from_*.py` slicers cut each down to its
+longest axis. The slicers infer the repo root from
 `Path(__file__).resolve().parent.parent` and read from
 `<parent>/omnilearned_proxy_pretrain_1x4/data/streams` — the `_1x4` suffix matters, it is
 where `prepare_data_proxy_pretrain.sh` actually writes.
+
+The eigen proxy is built separately, by
+[src/make_eigen_lambda_from_streams.py](src/make_eigen_lambda_from_streams.py)
+(`--index K`, K = 1, 2, 3 → `3d_x_y_z_eigenvalues_lambda{K}_10000`), directly from the
+shared N=10000 finetune data, so the finetune data has to exist first. `prepare_data.py`
+still has a 3-target `3d_x_y_z_eigenvalues` branch, but nothing uses it any more; the new
+script's K = 1 output is byte-identical to the λ₁ dataset the paper was trained on.
+Note what that implies: the eigen proxy's inputs are
+the **same** 6,000 / 2,000 / 2,000 streams as the N=10000 finetune split, only relabelled.
+There is no test leakage (pretraining uses the train split only), but for the 6,000-stream
+setting it is not independent data. λ₂ / λ₃ are whitelisted in the pretrain submitter but
+are not among the paper's seven.
 
 Each proxy z-scores its labels using **train-split statistics**, persisted to
 `streams/<synthesis_tag>_stats.npz` so val/test reuse the same scaler. The filename uses
@@ -102,8 +123,8 @@ split was not processed first.
 
 Rotation augmentation (a random 3D rotation inside the synthesis branch) is applied to
 `ellipsoid`, `cube`, `hard_ellipsoid` and `box`. It is **not** applied to `bounded_ball`
-or `gaussian_ball` (isotropic, so it would be a no-op), nor to `3d_x_y_z_eigenvalues`
-(those are real streams, already at arbitrary orientations).
+or `gaussian_ball` (isotropic, so it would be a no-op), nor to the eigen proxy (real
+streams, already at arbitrary orientations).
 
 Proxy point clouds read `num_particles` from the raw HDF5 (4,000) rather than hardcoding
 it. Splits are `int(n*0.6)` / `int(n*0.8)`, i.e. 3:1:1.
@@ -112,10 +133,19 @@ it. Splits are `int(n*0.6)` / `int(n*0.8)`, i.e. 3:1:1.
 
 1. **In-house DeepSets baseline** ([src/main.py](src/main.py) + [src/model.py](src/model.py)
    + [src/dataset.py](src/dataset.py)): MLP encoder → mean+max+std pooling. Hidden dim is
-   configurable (`baseline` = 128, `baseline_256` = 256); the paper reports `baseline_256`
-   as "DeepSets". Submitted through
-   [scripts/submit_training_variant.sh](scripts/submit_training_variant.sh), which handles
-   **only** the `baseline` / `baseline_256` variants.
+   set per variant: `baseline` = 128, `baseline_256` = 256 (the paper's "DeepSets"),
+   `baseline_1024` = 1024 (about OmniLearned-s size, for the architecture-vs-size
+   control). Submitted through
+   [scripts/submit_training_variant.sh](scripts/submit_training_variant.sh); `MODEL_SUFFIX`
+   is appended to the folder and job name. Runs on 1 GPU (`--qos=shared`). Two behaviours
+   to know:
+   - **No silent resume.** If `run_N/checkpoints/checkpoint_latest.pth` already exists,
+     [scripts/run_baseline_train_common.sh](scripts/run_baseline_train_common.sh) refuses
+     to start unless `RESUME=1` (continue it, e.g. after a timeout) or `FORCE=1` (delete
+     `run_N` and retrain). The epoch count comes from `EPOCHS` or `EPOCH_NUM`.
+   - [src/eval_baseline_shared_test.py](src/eval_baseline_shared_test.py) reads the
+     hidden size from the checkpoint (`encoder.0.weight` is `[hidden, input_dim]`), not
+     from the folder name.
 2. **OmniLearned transformer** (external CLI): every `omnilearned_*` and `omnicosmos_*`
    model. All of these live in [scripts/stream_1x4/](scripts/stream_1x4/) and call
    `srun omnilearned train …` on 1 node × 4 GPUs. Pretrain checkpoints come either from
@@ -136,14 +166,18 @@ matrices) was removed; do not reintroduce it.
 |---|---|
 | `baseline` (DeepSets, hidden 128) | 41,985 |
 | `baseline_256` (DeepSets, hidden 256) | 116,609 |
-| OmniLearned, every variant | 1,389,477 |
+| `baseline_1024` (DeepSets, hidden 1024) | 1,252,481 |
+| OmniLearned-s, every variant | 1,389,477 |
 
 Every OmniLearned variant — from scratch, jet-pretrained, cosmology-pretrained,
 proxy-pretrained — shares the same backbone, so differences between them come only from
-initialisation. The DeepSets baselines are small sanity checks, **not** capacity-matched
-competitors; read the figure with that in mind. (These counts are inherited from the
-pre-cleanup archive; the `count_params.py` that produced them is no longer in the repo,
-so re-derive from a checkpoint if you need to be certain.)
+initialisation. `baseline` and `baseline_256` are small sanity checks, **not**
+capacity-matched competitors; `baseline_1024` (90% of OmniLearned-s) is the one that is.
+
+DeepSets parameters are h² + 199h + 129 for 3 input features, which reproduces every
+DeepSets row. The OmniLearned count is from our trained stream checkpoints; the released
+jet-pretrained `best_model_pretrain_s.pt` has 1,494,320 because it still carries the jet
+task's input and output layers, which finetuning replaces.
 
 ## Proxy pretrain → finetune wiring
 
@@ -183,7 +217,7 @@ Where a script's `sbatch` defaults live:
 
 | script | where the defaults are |
 |---|---|
-| `scripts/run_baseline_submission.sh`, `scripts/run_baseline_256_submission.sh` | [scripts/submit_training_variant.sh](scripts/submit_training_variant.sh) |
+| `scripts/run_baseline{,_256,_1024}_submission.sh` | [scripts/submit_training_variant.sh](scripts/submit_training_variant.sh) |
 | everything under `scripts/stream_1x4/` | the wrapper script itself |
 
 The `stream_1x4/` wrappers interleave pre-submission logic (checkpoint copying,
@@ -204,7 +238,18 @@ Useful patterns:
 - **Quick smoke test**: `SBATCH_QOS=debug SBATCH_TIME=00:30:00 SBATCH_ARRAY=0-0 bash <runner>`.
 - **Resubmit only failed array tasks**: `SBATCH_ARRAY="<idx[,idx...]>" bash <runner>` —
   the per-task dir is `run_$((BASE_IDX + SLURM_ARRAY_TASK_ID))`, so a resubmit overwrites
-  in place.
+  in place (DeepSets needs `RESUME=1` or `FORCE=1` for that, see above).
+- **Run a variant without touching existing results**: every `stream_1x4/` scratch and
+  finetune submitter takes `MODEL_SUFFIX` (default `_1x4`) and `EPOCH_NUM` (default 50);
+  a new suffix puts the runs in a new sibling folder next to the existing one.
+
+Known flake: the jet-pretrained finetune lets OmniLearned download
+`best_model_pretrain_s.pt` into each `run_N` at start, and all four ranks download it at
+once. Occasionally one rank reads the half-written file and the job dies within about two
+minutes with `Cannot use weights_only=True with files saved in the legacy .tar format`.
+Resubmitting that index fixes it: the complete file is then already on disk and is not
+fetched again. Proxy and OmniCosmos finetunes are unaffected, because their submitters
+copy the checkpoint in before `sbatch`.
 
 ## Evaluation flow
 
@@ -227,6 +272,11 @@ Useful patterns:
    Mind the two directories: step 2 produces `shared_test10000/`, step 3 produces
    `shared_test10000_bootstrap/`, and **step 4 reads only the latter** — so skipping
    step 3 makes the figure silently find nothing.
+   Its model list is hard-coded to the `_1x4` folders; for any other folder call
+   [src/compute_bootstrap_shared_test.py](src/compute_bootstrap_shared_test.py) directly
+   (`--target_model <folder> --run_idxs ...`). The resampling seed is fixed, so reruns
+   give identical numbers. `eval_shared_test10000.sh` itself takes `TARGET_MODELS`,
+   `RUN_IDXS` and `DATASET_SIZES`, and skips runs that are already evaluated.
 4. [evaluation/results_3d_shared_test10000.sh](evaluation/results_3d_shared_test10000.sh)
    feeds a list of `target_columns:dataset_size:target_model[:display_name]` strings to
    [src/build_results_table.py](src/build_results_table.py), which finds the best-val
@@ -236,6 +286,10 @@ Useful patterns:
 The optional 4th colon-delimited field is a **display-name override**: paths still resolve
 via the on-disk folder name, while the CSV `Model` column and the plot legend use the
 override.
+
+To look at specific runs without touching any figure, use
+[src/print_r2.py](src/print_r2.py): `python src/print_r2.py SIZE:MODEL[:RUNS] ...` prints
+each run's R² and a summary in the appendix-table form, and writes nothing.
 
 ## Figure generation
 
