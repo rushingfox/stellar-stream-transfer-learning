@@ -13,7 +13,7 @@ import numpy as np
 import pandas as pd
 import torch
 
-from exp_paths import get_data_file_path, get_run_dir, get_results_dir, validate_dataset_size
+from exp_paths import get_dataset_dir, get_run_dir, get_results_dir, validate_dataset_size
 from model import DeepSetsRegressor
 
 
@@ -28,17 +28,27 @@ def parse_args():
     p.add_argument('--eval_dataset_size', type=int, default=10000,
                     help="dataset_size whose test split is used as the shared/fixed evaluation set")
     p.add_argument('--hidden_dim', type=int, default=None,
-                    help="defaults to 256 if '256' is in --target_model, else 128")
+                    help="optional check: read from the checkpoint; an explicit value that disagrees is an error")
     p.add_argument('--input_dim', type=int, default=3)
     p.add_argument('--batch_size', type=int, default=32)
     p.add_argument('--output_csv_name', type=str, default="loss_history_shared_test10000.csv")
     return p.parse_args()
 
 
-def infer_hidden_dim(target_model, override):
-    if override is not None:
-        return override
-    return 256 if '256' in target_model else 128
+def hidden_dim_from_checkpoint(state_dict, override):
+    """encoder.0 is Linear(input_dim, hidden_dim), so its weight is
+    [hidden_dim, input_dim]. Read from the weights rather than guessed from the
+    folder name, so any width (and any folder suffix) works."""
+    hidden_dim = int(state_dict["encoder.0.weight"].shape[0])
+    if override is not None and override != hidden_dim:
+        raise ValueError(f"--hidden_dim {override} disagrees with the checkpoint ({hidden_dim})")
+    return hidden_dim
+
+
+def shared_baseline_h5(repo_root, target_columns, dataset_size):
+    """<target_columns>_<size>/data/baseline_dataset.h5 -- one copy per size,
+    shared by every DeepSets width (like OmniLearned's data/streams/)."""
+    return get_dataset_dir(repo_root, target_columns, dataset_size) / "data" / "baseline_dataset.h5"
 
 
 def compute_train_stats(h5_path, input_dim):
@@ -82,15 +92,14 @@ def main():
     args = parse_args()
     validate_dataset_size(args.dataset_size)
     validate_dataset_size(args.eval_dataset_size)
-    hidden_dim = infer_hidden_dim(args.target_model, args.hidden_dim)
 
     run_dir = get_run_dir(args.repo_root, args.target_columns, args.dataset_size, args.target_model, args.run_idx)
     if not os.path.isdir(run_dir):
         print(f"Warning: {run_dir} does not exist. Skipping.")
         return
 
-    own_h5 = get_data_file_path(args.repo_root, args.target_columns, args.dataset_size, args.target_model, "baseline_dataset.h5")
-    eval_h5 = get_data_file_path(args.repo_root, args.target_columns, args.eval_dataset_size, args.target_model, "baseline_dataset.h5")
+    own_h5 = shared_baseline_h5(args.repo_root, args.target_columns, args.dataset_size)
+    eval_h5 = shared_baseline_h5(args.repo_root, args.target_columns, args.eval_dataset_size)
 
     ckpt_path = find_checkpoint(run_dir)
     best_epoch, best_val = read_own_best_val(run_dir)
@@ -99,8 +108,10 @@ def main():
     raw, y = load_test_split(eval_h5)
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
+    state_dict = torch.load(ckpt_path, map_location=device)
+    hidden_dim = hidden_dim_from_checkpoint(state_dict, args.hidden_dim)
     model = DeepSetsRegressor(args.input_dim, hidden_dim).to(device)
-    model.load_state_dict(torch.load(ckpt_path, map_location=device))
+    model.load_state_dict(state_dict)
     model.eval()
 
     mean_t = torch.tensor(mean, dtype=torch.float32)

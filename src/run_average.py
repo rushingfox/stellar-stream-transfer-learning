@@ -3,7 +3,7 @@ import h5py
 import numpy as np
 import pandas as pd
 from pathlib import Path
-from exp_paths import VALID_DATASET_SIZES, get_data_file_path, get_results_dir
+from exp_paths import VALID_DATASET_SIZES, get_dataset_dir, get_results_dir
 
 
 def parse_args():
@@ -46,14 +46,8 @@ def main():
     args = parse_args()
     repo_dir = Path(__file__).resolve().parent.parent
 
-    # Just choose any one of the datasets--the result would be the same
-    h5_path = get_data_file_path(
-        repo_dir,
-        args.target_columns,
-        args.dataset_size,
-        "baseline",
-        "baseline_dataset.h5",
-    )
+    # The shared DeepSets dataset for this size (only its labels are used).
+    h5_path = get_dataset_dir(repo_dir, args.target_columns, args.dataset_size) / "data" / "baseline_dataset.h5"
     
     if not h5_path.exists():
         print(f"Error: H5 file not found at {h5_path}. Please generate 3D baseline data first.")
@@ -79,10 +73,7 @@ def main():
         test_loss = np.mean((y_test - mean_train) ** 2)
         csv_name = "loss_history.csv"
     else:
-        eval_h5_path = get_data_file_path(
-            repo_dir, args.target_columns, args.eval_dataset_size,
-            "baseline", "baseline_dataset.h5",
-        )
+        eval_h5_path = get_dataset_dir(repo_dir, args.target_columns, args.eval_dataset_size) / "data" / "baseline_dataset.h5"
         with h5py.File(eval_h5_path, 'r') as f:
             y_eval = f['Log_Prog_Mass'][:]
         eval_val_split = int(y_eval.shape[0] * 0.8)

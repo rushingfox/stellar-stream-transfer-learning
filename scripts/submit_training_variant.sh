@@ -2,7 +2,7 @@
 
 set -euo pipefail
 
-variant=${1:?Error: please provide variant baseline/baseline_256}
+variant=${1:?Error: please provide variant baseline/baseline_256/baseline_1024}
 
 case "$variant" in
     baseline)
@@ -33,6 +33,22 @@ case "$variant" in
         )
         submit_idxs_default=(0)
         ;;
+    baseline_1024)
+        # Hidden 1024 -> 1,252,481 params, ~90% of OmniLearned-s on this task
+        # (1,389,477): the "same size, different architecture" control.
+        model_dir="baseline_1024"
+        run_script="run_baseline_1024.sh"
+        names_default=("b1024_3d_xyz" "b1024_3d_radec" "b1024_4d_xyz" "b1024_4d_radec" "b1024_6d_xyz" "b1024_6d_radec")
+        target_columns_default=(
+            "3d_x_y_z"
+            "3d_ra_dec_parallax"
+            "4d_x_y_z_vtotal"
+            "4d_ra_dec_parallax_vtotal"
+            "6d_x_y_z_vx_vy_vz"
+            "6d_ra_dec_parallax_proper_motions"
+        )
+        submit_idxs_default=(0)
+        ;;
     *)
         echo "Error: unsupported variant='$variant'." >&2
         exit 1
@@ -40,6 +56,11 @@ case "$variant" in
 esac
 
 dataset_size=${DATASET_SIZE:-1000}
+# Appended to the model folder (and job name), e.g. _ep100 -> baseline_256_ep100,
+# so a run with different settings lands in its own folder instead of the
+# existing one. Empty by default: the folder names stay exactly as before.
+model_suffix=${MODEL_SUFFIX:-}
+model_dir="${model_dir}${model_suffix}"
 
 if [[ -n "${TARGET_COLUMNS:-}" ]]; then
     read -r -a target_columns <<< "${TARGET_COLUMNS}"
@@ -84,10 +105,10 @@ fi
 sbatch_time="${SBATCH_TIME:-}"
 if [[ -z "$sbatch_time" ]]; then
     case "${variant}:${dataset_size}" in
-        baseline:100|baseline:300|baseline:1000|baseline_256:100|baseline_256:300|baseline_256:1000)
+        baseline:100|baseline:300|baseline:1000|baseline_256:100|baseline_256:300|baseline_256:1000|baseline_1024:100|baseline_1024:300|baseline_1024:1000)
             sbatch_time="00:30:00"
             ;;
-        baseline:10000|baseline_256:10000)
+        baseline:10000|baseline_256:10000|baseline_1024:10000)
             sbatch_time="05:00:00"
             ;;
     esac
@@ -106,9 +127,9 @@ for idx in "${submit_idxs[@]}"; do
     fi
 
     if (( idx < ${#names[@]} )); then
-        job_name="${names[$idx]}"
+        job_name="${names[$idx]}${model_suffix}"
     else
-        job_name="${variant}_${idx}"
+        job_name="${variant}_${idx}${model_suffix}"
     fi
 
     run_dir="${repo_dir}/${target_columns[$idx]}_${dataset_size}/${model_dir}"

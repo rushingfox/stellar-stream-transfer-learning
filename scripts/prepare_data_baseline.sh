@@ -48,15 +48,28 @@ fi
 
 raw_data_prefix=${RAW_DATA_PREFIX:-"prog_mass_reg_dataset"}
 
+# Every DeepSets width (baseline, baseline_256, baseline_1024, ...) trains on the
+# IDENTICAL data, so it is written ONCE per (target_columns, dataset_size) into
+# the shared "<target_columns>_<size>/data/" dir -- the same dir OmniLearned's
+# data/streams/ lives in -- and the runner reads it via ../../data from run_N/.
 for dataset_size in "${dataset_sizes[@]}"; do
     input_raw="../raw_data/${raw_data_prefix}_${dataset_size}.h5"
     for tc in "${target_columns[@]}"; do
-        echo "Processing baseline dataset for ${tc}, size=${dataset_size}"
+        shared_dir="../${tc}_${dataset_size}/data"
+        if [[ -f "${shared_dir}/baseline_dataset.h5" ]]; then
+            echo "Shared baseline data already exists at ${shared_dir}, skipping ${tc} size=${dataset_size}"
+            continue
+        fi
+        echo "Processing shared baseline dataset for ${tc}, size=${dataset_size}"
         python ../src/prepare_data.py \
             --input_raw "$input_raw" \
             --output_root .. \
             --dataset_size "$dataset_size" \
             --target_model "baseline" \
+            --output_model "_shared_baseline_tmp" \
             --target_columns "$tc"
+        mkdir -p "${shared_dir}"
+        mv "../${tc}_${dataset_size}/_shared_baseline_tmp/data/baseline_dataset.h5" "${shared_dir}/"
+        rmdir "../${tc}_${dataset_size}/_shared_baseline_tmp/data" "../${tc}_${dataset_size}/_shared_baseline_tmp" 2>/dev/null || true
     done
 done
