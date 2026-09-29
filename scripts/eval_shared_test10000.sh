@@ -75,6 +75,16 @@ export WORLD_SIZE=1
 export MASTER_ADDR=localhost
 export MASTER_PORT=$(( 15000 + ($$ % 15000) ))
 
+# The model size the run was trained with, from its hparams.json; small if
+# that file or field is missing.
+model_size_of() {
+    python -c 'import json, sys
+try:
+    print(json.load(open(sys.argv[1]))["omnilearned_params"]["model_size"]["value"])
+except (OSError, KeyError, ValueError):
+    print("small")' "$1/hparams.json"
+}
+
 eval_omnilearned() {
     local run_dir="$1"
     local out_csv="${run_dir}/results/${output_csv_name}"
@@ -88,7 +98,9 @@ eval_omnilearned() {
         return
     fi
 
-    echo "[eval] ${run_dir}  ->  ${target_columns}_${eval_dataset_size} test split"
+    local model_size
+    model_size="$(model_size_of "${run_dir}")"
+    echo "[eval] ${run_dir}  ->  ${target_columns}_${eval_dataset_size} test split (size ${model_size})"
     rm -rf "${run_dir}/shared_test${eval_dataset_size}"
     mkdir -p "${run_dir}/shared_test${eval_dataset_size}"
     (
@@ -99,7 +111,7 @@ eval_omnilearned() {
             --save-tag "" \
             --dataset streams \
             --path "${shared_data_dir}" \
-            --size small \
+            --size "${model_size}" \
             --num-classes 1 \
             --num-feat 3 \
             --num-coord 3 \

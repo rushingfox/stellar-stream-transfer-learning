@@ -9,6 +9,8 @@
 #   DATASET_SIZE   default 10000
 #   EPOCH_NUM      default 50
 #   MODEL_SUFFIX   default "_1x4"
+#   MODEL_SIZE     small (default) | medium | large; non-small needs an explicit
+#                  MODEL_SUFFIX, e.g. "_m_1x4_ep100"
 #   SBATCH_QOS / SBATCH_TIME / SBATCH_ARRAY
 #
 # Data: uses the shared dataset-level data dir (<target_columns>_<size>/data/),
@@ -19,6 +21,18 @@ set -euo pipefail
 dataset_size=${DATASET_SIZE:-10000}
 epoch_num=${EPOCH_NUM:-50}
 model_suffix=${MODEL_SUFFIX:-_1x4}
+model_size=${MODEL_SIZE:-small}
+
+case "${model_size}" in
+    small|medium|large) ;;
+    *) echo "Error: MODEL_SIZE must be small, medium or large, got '${model_size}'" >&2; exit 1 ;;
+esac
+# Keep non-small runs out of the small models' folders.
+if [[ "${model_size}" != "small" && -z "${MODEL_SUFFIX:-}" ]]; then
+    echo "Error: MODEL_SIZE=${model_size} needs an explicit MODEL_SUFFIX (e.g. _m_1x4_ep100)" >&2
+    exit 1
+fi
+export MODEL_SIZE="${model_size}"
 
 # Auto-tighten the time estimate for the two smaller sizes unless the user
 # explicitly overrides — 100/300/1000 finish well within 30 min, but use the
@@ -28,7 +42,8 @@ model_suffix=${MODEL_SUFFIX:-_1x4}
 # jobs per user at ~3, which becomes a bottleneck once you're submitting many
 # seeds/models in parallel; regular has no such cap and these jobs are short
 # regardless. Explicit SBATCH_QOS/SBATCH_TIME always take priority.
-if [[ "${dataset_size}" == "100" || "${dataset_size}" == "300" || "${dataset_size}" == "1000" ]]; then
+# Only for the small model; larger ones keep the runner's own --time.
+if [[ "${model_size}" == "small" ]] && [[ "${dataset_size}" == "100" || "${dataset_size}" == "300" || "${dataset_size}" == "1000" ]]; then
     SBATCH_QOS="${SBATCH_QOS:-regular}"
     SBATCH_TIME="${SBATCH_TIME:-00:30:00}"
 fi
@@ -58,6 +73,7 @@ sbatch_args=()
 cat <<EOF
 [Submitting]
   job_name         : ${job_name}
+  model_size       : ${model_size}
   run_dir          : ${run_dir}
   qos / time       : ${SBATCH_QOS:-script-default} / ${SBATCH_TIME:-script-default}
   array            : ${SBATCH_ARRAY:-script-default (0-2)}

@@ -15,6 +15,8 @@
 # Positional args:
 #   $1 : num_feat     (e.g. 3 for 3d_x_y_z)
 #   $2 : epoch_num    (e.g. 50)
+#
+# Env: MODEL_SIZE = small | medium | large (small by default), plus LR / WD / BATCH.
 
 #SBATCH -A m4474
 #SBATCH --constraint=gpu
@@ -71,11 +73,12 @@ export MASTER_ADDR=localhost
 _RAW_LR=${LR-UNSET}
 _RAW_WD=${WD-UNSET}
 _RAW_BATCH=${BATCH-UNSET}
+_RAW_MODEL_SIZE=${MODEL_SIZE-UNSET}
 
 LR=${LR:-5e-5}
 WD=${WD:-0.0}
 BATCH=${BATCH:-4}
-SIZE=small
+SIZE=${MODEL_SIZE:-small}
 MODE=regression
 NUM_CLASSES=1
 
@@ -90,6 +93,7 @@ cat > invocation.txt <<EOF
 #   LR    = ${_RAW_LR}
 #   WD    = ${_RAW_WD}
 #   BATCH = ${_RAW_BATCH}
+#   MODEL_SIZE = ${_RAW_MODEL_SIZE}
 #
 # --- Command as invoked (verbatim; bash cannot capture env-var prefixes like LR=...) ---
 ${_INVOCATION_LINE}
@@ -97,7 +101,7 @@ ${_INVOCATION_LINE}
 # --- Fully reproducible command (defaults inlined; use this to re-run even if
 #     the runner's built-in defaults change later; identical to what the training
 #     actually saw) ---
-LR=${LR} WD=${WD} BATCH=${BATCH} ${_INVOCATION_LINE}
+LR=${LR} WD=${WD} BATCH=${BATCH} MODEL_SIZE=${SIZE} ${_INVOCATION_LINE}
 EOF
 
 python3 << PYEOF
@@ -138,6 +142,7 @@ echo "======================================="
 echo "[1x4 scratch] launcher = torchrun"
 echo "  num_feat / epochs      : ${NUM_FEAT} / ${TOTAL_EPOCHS}"
 echo "  lr / wd / batch        : ${LR} / ${WD} / ${BATCH}"
+echo "  model size             : ${SIZE}"
 echo "  MASTER_ADDR:MASTER_PORT: ${MASTER_ADDR}:${MASTER_PORT}"
 echo "======================================="
 

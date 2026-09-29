@@ -20,6 +20,9 @@
 # Positional args:
 #   $1 : num_feat     (e.g. 3 for 3d_x_y_z)
 #   $2 : epoch_num    (e.g. 50)
+#
+# Env: MODEL_SIZE = small | medium | large (small by default), which also picks
+# the jet checkpoint (pretrain_s / _m / _l), plus LR / WD / LR_FACTOR / BATCH.
 
 #SBATCH -A m4474
 #SBATCH --constraint=gpu
@@ -66,7 +69,6 @@ fi
 
 NUM_FEAT=${1:?Error: need num_feat}
 TOTAL_EPOCHS=${2:?Error: need epoch_num}
-LOAD_TAG="pretrain_s"
 
 export MASTER_PORT=$(( 15000 + (${SLURM_JOB_ID:-$$} % 15000) ))
 export MASTER_ADDR=localhost
@@ -75,14 +77,30 @@ _RAW_LR=${LR-UNSET}
 _RAW_WD=${WD-UNSET}
 _RAW_LR_FACTOR=${LR_FACTOR-UNSET}
 _RAW_BATCH=${BATCH-UNSET}
+_RAW_MODEL_SIZE=${MODEL_SIZE-UNSET}
 
 LR=${LR:-5e-5}
 WD=${WD:-0.0}
 LR_FACTOR=${LR_FACTOR:-1.0}
 BATCH=${BATCH:-4}
-SIZE=small
+SIZE=${MODEL_SIZE:-small}
 MODE=regression
 NUM_CLASSES=1
+
+case "${SIZE}" in
+    small)  LOAD_TAG="pretrain_s" ;;
+    medium) LOAD_TAG="pretrain_m" ;;
+    large)  LOAD_TAG="pretrain_l" ;;
+    *) echo "Error: MODEL_SIZE must be small, medium or large, got '${SIZE}'" >&2; exit 1 ;;
+esac
+
+# Use the local copy of the jet checkpoint when there is one. Otherwise all
+# four ranks download it at once and one can read a half-written file.
+# Without a local copy, OmniLearned downloads it as before.
+LOCAL_CKPT="${REPO_ROOT}/omnicosmos_checkpoints/best_model_${LOAD_TAG}.pt"
+if [[ ! -f "./best_model_${LOAD_TAG}.pt" && -f "${LOCAL_CKPT}" ]]; then
+    cp "${LOCAL_CKPT}" ./
+fi
 
 cat > invocation.txt <<EOF
 # Recorded: $(date -Iseconds)
@@ -96,6 +114,7 @@ cat > invocation.txt <<EOF
 #   WD        = ${_RAW_WD}
 #   LR_FACTOR = ${_RAW_LR_FACTOR}
 #   BATCH     = ${_RAW_BATCH}
+#   MODEL_SIZE = ${_RAW_MODEL_SIZE}
 #
 # --- Command as invoked (verbatim; bash cannot capture env-var prefixes like LR=...) ---
 ${_INVOCATION_LINE}
@@ -103,7 +122,7 @@ ${_INVOCATION_LINE}
 # --- Fully reproducible command (defaults inlined; use this to re-run even if
 #     the runner's built-in defaults change later; identical to what the training
 #     actually saw) ---
-LR=${LR} WD=${WD} LR_FACTOR=${LR_FACTOR} BATCH=${BATCH} ${_INVOCATION_LINE}
+LR=${LR} WD=${WD} LR_FACTOR=${LR_FACTOR} BATCH=${BATCH} MODEL_SIZE=${SIZE} ${_INVOCATION_LINE}
 EOF
 
 python3 << PYEOF
@@ -146,6 +165,7 @@ echo "======================================="
 echo "[1x4 jet-pretrain finetune] launcher = torchrun"
 echo "  pretrain_tag / num_feat / epochs : ${LOAD_TAG} / ${NUM_FEAT} / ${TOTAL_EPOCHS}"
 echo "  lr / wd / lr_factor / batch      : ${LR} / ${WD} / ${LR_FACTOR} / ${BATCH}"
+echo "  model size                       : ${SIZE}"
 echo "  MASTER_ADDR:MASTER_PORT          : ${MASTER_ADDR}:${MASTER_PORT}"
 echo "======================================="
 
