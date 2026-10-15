@@ -15,6 +15,7 @@ import functools
 print = functools.partial(print, flush=True)
 
 import os
+from collections import deque
 from multiprocessing import Pool
 
 import astropy.coordinates as coord
@@ -71,10 +72,17 @@ def stream_to_df(stream, stream_id, galactocentric_frame=None):
 def collect_streams(worker, tasks, num_streams, num_workers):
     """Runs worker over tasks in parallel until num_streams are accepted.
 
-    Results are consumed in task order (imap), so the accepted set depends only
-    on the seeds, not on the worker count. Returns the per-stream particle
-    tables and the concatenated per-stream properties, both renumbered with
-    stream_id 0..num_streams-1.
+    Results are consumed in task order, so the accepted set (the first
+    num_streams successes in seed order) depends only on the seeds, not on the
+    worker count. Returns the per-stream particle tables and the concatenated
+    per-stream properties, both renumbered with stream_id 0..num_streams-1.
+
+    At most 4 tasks per worker are in flight, topped up as results come in, so
+    every worker stays busy. Once enough streams are accepted no more tasks are
+    submitted, and the pool finishes the ones in flight and shuts down with
+    close()/join(). Stopping early with terminate() instead kills workers
+    mid-task; one killed while holding the result queue's lock leaves the main
+    process waiting on it forever.
     """
     all_streams = []
     all_props   = []
@@ -82,12 +90,15 @@ def collect_streams(worker, tasks, num_streams, num_workers):
     generated_count = 0
     attempt_count   = 0
 
-    # chunksize: each worker gets a small batch to reduce scheduling overhead.
-    # Tune if needed; 2–4 works well when each task takes ~seconds.
-    chunksize = max(1, num_workers // 2)
+    max_in_flight = 4 * num_workers
+    in_flight = deque()   # AsyncResults, oldest (lowest seed) first
 
     with Pool(processes=num_workers) as pool:
-        for result in pool.imap(worker, tasks, chunksize=chunksize):
+        while generated_count < num_streams:
+            while len(in_flight) < max_in_flight:
+                in_flight.append(pool.apply_async(worker, (next(tasks),)))
+
+            result = in_flight.popleft().get()
             attempt_count += 1
 
             if result is None:
@@ -109,10 +120,9 @@ def collect_streams(worker, tasks, num_streams, num_workers):
                 f"Stream accepted  (attempts so far: {attempt_count})"
             )
 
-            if generated_count >= num_streams:
-                pool.terminate()
-                pool.join()
-                break
+        # The surplus tasks still in flight run to completion; their results are discarded.
+        pool.close()
+        pool.join()
 
     print(
         f"\nDone. Generated {generated_count} streams "
