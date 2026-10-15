@@ -73,12 +73,27 @@ export MASTER_ADDR=localhost
 _RAW_LR=${LR-UNSET}
 _RAW_WD=${WD-UNSET}
 _RAW_BATCH=${BATCH-UNSET}
+_RAW_MODE=${MODE-UNSET}
+_RAW_NOISE=${OMNI_GEN_NOISE_STD-UNSET}
 
 LR=${LR:-5e-5}
 WD=${WD:-0.0}
 BATCH=${BATCH:-4}
 SIZE=small
-MODE=regression
+MODE=${MODE:-regression}
+
+# Generator mode: diffusion noise scaled to this dataset's train-split coordinate std
+# (pooled over x, y, z), unless OMNI_GEN_NOISE_STD is given explicitly.
+if [[ "${MODE}" == "generator" && -z "${OMNI_GEN_NOISE_STD:-}" ]]; then
+    OMNI_GEN_NOISE_STD=$(python3 - <<'PYEOF'
+import glob, h5py
+f = glob.glob("../data/streams/train/*.hdf5")[0]
+print(float(h5py.File(f, "r")["data"][:, :, :3].std()))
+PYEOF
+)
+fi
+OMNI_GEN_NOISE_STD=${OMNI_GEN_NOISE_STD:-}
+export OMNI_GEN_NOISE_STD
 
 cat > invocation.txt <<EOF
 # Recorded: $(date -Iseconds)
@@ -91,6 +106,8 @@ cat > invocation.txt <<EOF
 #   LR    = ${_RAW_LR}
 #   WD    = ${_RAW_WD}
 #   BATCH = ${_RAW_BATCH}
+#   MODE  = ${_RAW_MODE}
+#   OMNI_GEN_NOISE_STD = ${_RAW_NOISE}
 #
 # --- Command as invoked (verbatim; bash cannot capture env-var prefixes like LR=...) ---
 ${_INVOCATION_LINE}
@@ -98,7 +115,7 @@ ${_INVOCATION_LINE}
 # --- Fully reproducible command (defaults inlined; use this to re-run even if
 #     the runner's built-in defaults change later; identical to what the training
 #     actually saw) ---
-LR=${LR} WD=${WD} BATCH=${BATCH} ${_INVOCATION_LINE}
+LR=${LR} WD=${WD} BATCH=${BATCH} MODE=${MODE} OMNI_GEN_NOISE_STD=${OMNI_GEN_NOISE_STD} ${_INVOCATION_LINE}
 EOF
 
 python3 << PYEOF
@@ -123,6 +140,7 @@ explicit = {
     "local_interaction": True,
     "interaction_type":  "astro",
     "fine_tune":         False,
+    "gen_noise_std":     float("${OMNI_GEN_NOISE_STD}") if "${OMNI_GEN_NOISE_STD}" else None,
 }
 slurm = {
     "run_idx":       "${CURRENT_IDX:-0}",
@@ -139,6 +157,7 @@ echo "======================================="
 echo "[1x4 proxy pretrain] launcher = torchrun"
 echo "  num_feat / num_classes / epochs : ${NUM_FEAT} / ${NUM_CLASSES} / ${TOTAL_EPOCHS}"
 echo "  lr / wd / batch                 : ${LR} / ${WD} / ${BATCH}"
+echo "  mode / gen noise std            : ${MODE} / ${OMNI_GEN_NOISE_STD:-n/a}"
 echo "  MASTER_ADDR:MASTER_PORT         : ${MASTER_ADDR}:${MASTER_PORT}"
 echo "======================================="
 
@@ -169,27 +188,31 @@ if [ $? -ne 0 ]; then
     exit 1
 fi
 
-echo "---------------------------------------"
-echo "[1x4 proxy pretrain] Evaluation"
-torchrun \
-    --nproc_per_node=4 \
-    --nnodes=1 \
-    --master_addr="${MASTER_ADDR}" \
-    --master_port="${MASTER_PORT}" \
-    "$(which omnilearned)" evaluate \
-    -i ./ \
-    -o ./ \
-    --save-tag "" \
-    --dataset streams \
-    --path ../data \
-    --size "${SIZE}" \
-    --num-classes "${NUM_CLASSES}" \
-    --num-feat "${NUM_FEAT}" \
-    --num-coord 3 \
-    --mode "${MODE}" \
-    --batch "${BATCH}" \
-    --local-interaction \
-    --interaction-type astro
+# Generator mode skips this: its evaluate runs diffusion sampling and needs
+# conditioning inputs the streams data does not have.
+if [[ "${MODE}" != "generator" ]]; then
+    echo "---------------------------------------"
+    echo "[1x4 proxy pretrain] Evaluation"
+    torchrun \
+        --nproc_per_node=4 \
+        --nnodes=1 \
+        --master_addr="${MASTER_ADDR}" \
+        --master_port="${MASTER_PORT}" \
+        "$(which omnilearned)" evaluate \
+        -i ./ \
+        -o ./ \
+        --save-tag "" \
+        --dataset streams \
+        --path ../data \
+        --size "${SIZE}" \
+        --num-classes "${NUM_CLASSES}" \
+        --num-feat "${NUM_FEAT}" \
+        --num-coord 3 \
+        --mode "${MODE}" \
+        --batch "${BATCH}" \
+        --local-interaction \
+        --interaction-type astro
+fi
 
 echo "---------------------------------------"
 echo "[1x4 proxy pretrain] Generating results summary"
