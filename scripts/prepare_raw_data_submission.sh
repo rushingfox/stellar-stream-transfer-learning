@@ -2,6 +2,8 @@
 # submit_jobs.sh
 # Usage: bash prepare_raw_data_submission.sh
 # Submits one Slurm job per value of NUM_STREAMS.
+# TASK=subhalo generates the subhalo-perturbed dataset instead of the
+# progenitor-mass one (TASK=prog_mass by default); see prepare_raw_data.sh.
 
 cd ../raw_data
 mkdir -p logs
@@ -19,9 +21,12 @@ else
     num_streams_list=("${num_streams_default[@]}")
 fi
 
+task=${TASK:-prog_mass}
+
 for n in "${num_streams_list[@]}"; do
-    echo "Submitting job for NUM_STREAMS=$n  (time limit: ${TIME_LIMITS[$n]}) ..."
+    echo "Submitting job for TASK=$task NUM_STREAMS=$n  (time limit: ${TIME_LIMITS[$n]}) ..."
     sbatch --time=${TIME_LIMITS[$n]} \
-           --export=ALL,NUM_STREAMS=$n \
+           --job-name=raw_data_${task}_${n} \
+           --export=ALL,NUM_STREAMS=$n,TASK=$task \
            ../scripts/prepare_raw_data.sh
 done

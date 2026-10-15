@@ -3,7 +3,8 @@ raw_data_generation.py
 --------------
 Command-line script for generating synthetic stellar stream datasets.
 Converted from dataset_gen_v6.ipynb.
-Parallelised with multiprocessing.Pool for NERSC CPU nodes.
+Parallelised with multiprocessing.Pool for NERSC CPU nodes; the parallel loop
+and the HDF5 writer live in stream_generation_common.py.
 
 Usage example:
     python raw_data_generation.py --num_streams 1000 --output prog_mass_reg_dataset_1000.h5
@@ -14,7 +15,6 @@ print = functools.partial(print, flush=True)
 
 import argparse
 import math
-import os
 import random
 import sys
 
@@ -22,7 +22,6 @@ import astropy.coordinates as coord
 import astropy.units as u
 import gala.dynamics as gd
 import gala.potential as gp
-import h5py
 import numpy as np
 import pandas as pd
 from colossus.cosmology import cosmology
@@ -32,10 +31,17 @@ from gala.units import galactic
 from scipy.interpolate import interp1d
 from scipy.spatial.distance import pdist
 
+from stream_generation_common import (
+    collect_streams,
+    resolve_num_workers,
+    save_dataset,
+    seed_iter,
+    stream_to_df,
+)
+
 # multiprocessing — use 'spawn' to avoid issues with C extensions on Linux
 import multiprocessing as mp
 mp.set_start_method("spawn", force=True)
-from multiprocessing import Pool
 
 
 # ---------------------------------------------------------------------------
@@ -138,6 +144,7 @@ class ProgenitorParams:
 
 def SMHM(Mstar_in_Msun, smhm_model: str = "FIRE_LatteELVIS"):
     """Stellar-to-Halo Mass Relation."""
+    # Based on the FIRE: Latte/ELVIS fitting line in fig 2(a) of https://arxiv.org/pdf/2206.05295
     data = np.genfromtxt(f"./{smhm_model}_SMHM")
     log_Mstar = data[:, 0]
     log_Mhalo = data[:, 1]
@@ -262,23 +269,7 @@ def stream_gen(
         dt=progenitor_params.dt,
     )
 
-    stream_icrs = stream.to_coord_frame(coord.ICRS())
-
-    stream_df = pd.DataFrame({
-        "stream_id": stream_id,
-        "x":  stream.x,
-        "y":  stream.y,
-        "z":  stream.z,
-        "v_x": stream.v_x,
-        "v_y": stream.v_y,
-        "v_z": stream.v_z,
-        "ra":  stream_icrs.ra,
-        "dec": stream_icrs.dec,
-        "distance": stream_icrs.distance,
-        "pm_ra_cosdec": stream_icrs.pm_ra_cosdec,
-        "pm_dec": stream_icrs.pm_dec,
-        "radial_velocity": stream_icrs.radial_velocity,
-    })
+    stream_df = stream_to_df(stream, stream_id)
 
     criterion_2 = 1 if max_distance(stream.x, stream.y, stream.z) > 120 else 0
 
@@ -376,21 +367,6 @@ def _try_generate_one(task):
 
 
 # ---------------------------------------------------------------------------
-# Infinite task iterator
-# ---------------------------------------------------------------------------
-
-def _task_iter(base_seed, smhm_model, star_pot_form):
-    """Yields tasks with monotonically increasing seeds."""
-    attempt = 0
-    while True:
-        # Combine base seed and attempt index into a unique seed.
-        # Multiply base_seed by a large prime to spread the space.
-        seed = (base_seed * 1_000_003 + attempt) % (2**32)
-        yield (seed, smhm_model, star_pot_form)
-        attempt += 1
-
-
-# ---------------------------------------------------------------------------
 # Progenitor property columns saved into prog_properties dataset
 # ---------------------------------------------------------------------------
 
@@ -436,13 +412,7 @@ def generate_dataset(args):
     random.seed(base_seed)
     np.random.seed(base_seed)
 
-    # ---- worker count ------------------------------------------------------
-    if args.num_workers is not None:
-        num_workers = args.num_workers
-    else:
-        # On NERSC, SLURM_CPUS_PER_TASK is set automatically by Slurm
-        slurm_cpus = os.environ.get("SLURM_CPUS_PER_TASK")
-        num_workers = int(slurm_cpus) if slurm_cpus else os.cpu_count()
+    num_workers = resolve_num_workers(args.num_workers)
 
     print(f"Random base seed : {base_seed}")
     print(f"Target streams   : {args.num_streams}")
@@ -451,114 +421,16 @@ def generate_dataset(args):
     print(f"Star pot form    : {args.star_pot_form}")
     print()
 
-    all_streams = []
-    all_progs   = []
-
-    generated_count        = 0
-    attempt_count          = 0
-
-    # chunksize: each worker gets a small batch to reduce scheduling overhead.
-    # Tune if needed; 2–4 works well when each task takes ~seconds.
-    chunksize = max(1, num_workers // 2)
-
-    tasks = _task_iter(base_seed, args.smhm_model, args.star_pot_form)
-
-    with Pool(processes=num_workers) as pool:
-        for result in pool.imap(_try_generate_one, tasks, chunksize=chunksize):
-            attempt_count += 1
-
-            if result is None:
-                continue
-
-            stream_df, prog_df, info = result
-
-            # Reassign canonical stream_id
-            stream_df["stream_id"] = generated_count
-            prog_df["stream_id"]   = generated_count
-
-            all_streams.append(stream_df)
-            all_progs.append(prog_df)
-            generated_count += 1
-
-            print(info)
-            print(
-                f"[{generated_count}/{args.num_streams}] "
-                f"Stream accepted  (attempts so far: {attempt_count})"
-            )
-
-            if generated_count >= args.num_streams:
-                pool.terminate()
-                pool.join()
-                break
-
-    print(
-        f"\nDone. Generated {generated_count} streams "
-        f"from {attempt_count} attempts "
-        f"(skip rate: {1 - generated_count/attempt_count:.1%})"
+    tasks = seed_iter(base_seed, args.smhm_model, args.star_pot_form)
+    all_streams, all_progs_df = collect_streams(
+        _try_generate_one, tasks, args.num_streams, num_workers
     )
 
-    # ---- assemble dataframes -----------------------------------------------
-    all_progs_df = pd.concat(all_progs, ignore_index=True)
-
-    # ---- build feature arrays ----------------------------------------------
-    ICRS_raw_data_list      = []
-    Cartesian_raw_data_list = []
-
-    for df in all_streams:
-        v_total  = np.sqrt(df["v_x"] ** 2 + df["v_y"] ** 2 + df["v_z"] ** 2)
-        parallax = 1.0 / df["distance"]
-
-        Cartesian_raw_data_list.append(
-            df.assign(v_total=v_total)[
-                ["x", "y", "z", "v_x", "v_y", "v_z", "v_total"]
-            ].to_numpy()
-        )
-        ICRS_raw_data_list.append(
-            df.assign(parallax=parallax)[
-                ["ra", "dec", "distance", "pm_ra_cosdec", "pm_dec",
-                 "radial_velocity", "parallax"]
-            ].to_numpy()
-        )
-
-    ICRS_raw_data      = np.stack(ICRS_raw_data_list)
-    Cartesian_raw_data = np.stack(Cartesian_raw_data_list)
-
-    # ---- build prog_properties array ---------------------------------------
-    prog_array = np.column_stack([
-        all_progs_df[col]
-        .apply(lambda x: x.value if hasattr(x, "value") else float(x))
-        .to_numpy()
-        for col in _PROG_COLS
-    ])
-
-    # ---- build label (pid) -------------------------------------------------
-    label_vals = (
-        all_progs_df[args.label_col]
-        .apply(lambda x: x.value if hasattr(x, "value") else float(x))
-        .to_numpy()
+    save_dataset(
+        args.output, all_streams, all_progs_df,
+        prop_cols=_PROG_COLS, prop_units=_PROG_UNITS, props_key="prog_properties",
+        label_col=args.label_col, log_label=args.log_label,
     )
-    if args.log_label:
-        label_vals = np.log10(label_vals)
-    labels = label_vals.reshape(-1, 1)
-
-    # ---- save to HDF5 ------------------------------------------------------
-    with h5py.File(args.output, "w") as f:
-        f.create_dataset("ICRS_data",      data=ICRS_raw_data)
-        f.create_dataset("Cartesian_data", data=Cartesian_raw_data)
-
-        ds_progs = f.create_dataset("prog_properties", data=prog_array)
-        ds_progs.attrs["columns"] = _PROG_COLS
-        ds_progs.attrs["units"]   = [_PROG_UNITS[c] for c in _PROG_COLS]
-
-        ds_pid = f.create_dataset("pid", data=labels)
-        ds_pid.attrs["label_col"]      = args.label_col
-        ds_pid.attrs["log_transformed"] = args.log_label
-
-    print("\nDataset saved to:", args.output)
-    print(f"  ICRS data shape:        {ICRS_raw_data.shape}  (7 features)")
-    print(f"  Cartesian data shape:   {Cartesian_raw_data.shape}  (7 features)")
-    print(f"  prog_properties shape:  {prog_array.shape}  ({len(_PROG_COLS)} columns)")
-    print(f"  Labels shape:           {labels.shape}  (label_col={args.label_col}, log={args.log_label})")
 
 
 # ---------------------------------------------------------------------------
