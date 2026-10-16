@@ -13,7 +13,7 @@ import numpy as np
 import pandas as pd
 import torch
 
-from exp_paths import get_dataset_dir, get_run_dir, get_results_dir, validate_dataset_size
+from exp_paths import DEFAULT_TASK, TASKS, find_label_key, get_dataset_dir, get_run_dir, get_results_dir, validate_dataset_size
 from model import DeepSetsRegressor
 
 
@@ -21,6 +21,7 @@ def parse_args():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument('--repo_root', type=str, default="..")
     p.add_argument('--target_columns', type=str, default="3d_x_y_z")
+    p.add_argument('--task', type=str, choices=list(TASKS), default=DEFAULT_TASK)
     p.add_argument('--dataset_size', type=int, required=True,
                     help="dataset_size the checkpoint was trained on (used to locate the run + its own train-stat file)")
     p.add_argument('--target_model', type=str, default="baseline_256")
@@ -45,16 +46,16 @@ def hidden_dim_from_checkpoint(state_dict, override):
     return hidden_dim
 
 
-def shared_baseline_h5(repo_root, target_columns, dataset_size):
+def shared_baseline_h5(repo_root, target_columns, dataset_size, task):
     """<target_columns>_<size>/data/baseline_dataset.h5 -- one copy per size,
     shared by every DeepSets width (like OmniLearned's data/streams/)."""
-    return get_dataset_dir(repo_root, target_columns, dataset_size) / "data" / "baseline_dataset.h5"
+    return get_dataset_dir(repo_root, target_columns, dataset_size, task) / "data" / "baseline_dataset.h5"
 
 
 def compute_train_stats(h5_path, input_dim):
     """Reproduces StreamDataset's train-split mean/std (dataset.py) exactly."""
     with h5py.File(h5_path, 'r') as f:
-        total = f['Log_Prog_Mass'].shape[0]
+        total = f[find_label_key(f)].shape[0]
         train_split = int(total * 0.6)
         train_raw = f['raw_data'][:train_split].reshape(-1, input_dim)
     mean = train_raw.mean(axis=0)
@@ -64,10 +65,11 @@ def compute_train_stats(h5_path, input_dim):
 
 def load_test_split(h5_path):
     with h5py.File(h5_path, 'r') as f:
-        total = f['Log_Prog_Mass'].shape[0]
+        label_key = find_label_key(f)
+        total = f[label_key].shape[0]
         val_split = int(total * 0.8)
         raw = f['raw_data'][val_split:]
-        y = f['Log_Prog_Mass'][val_split:]
+        y = f[label_key][val_split:]
     return raw, y
 
 
@@ -93,13 +95,13 @@ def main():
     validate_dataset_size(args.dataset_size)
     validate_dataset_size(args.eval_dataset_size)
 
-    run_dir = get_run_dir(args.repo_root, args.target_columns, args.dataset_size, args.target_model, args.run_idx)
+    run_dir = get_run_dir(args.repo_root, args.target_columns, args.dataset_size, args.target_model, args.run_idx, args.task)
     if not os.path.isdir(run_dir):
         print(f"Warning: {run_dir} does not exist. Skipping.")
         return
 
-    own_h5 = shared_baseline_h5(args.repo_root, args.target_columns, args.dataset_size)
-    eval_h5 = shared_baseline_h5(args.repo_root, args.target_columns, args.eval_dataset_size)
+    own_h5 = shared_baseline_h5(args.repo_root, args.target_columns, args.dataset_size, args.task)
+    eval_h5 = shared_baseline_h5(args.repo_root, args.target_columns, args.eval_dataset_size, args.task)
 
     ckpt_path = find_checkpoint(run_dir)
     best_epoch, best_val = read_own_best_val(run_dir)
@@ -127,7 +129,7 @@ def main():
     y = y.reshape(-1)
     test_mse = float(np.mean((preds - y) ** 2))
 
-    out_dir = get_results_dir(args.repo_root, args.target_columns, args.dataset_size, args.target_model, args.run_idx)
+    out_dir = get_results_dir(args.repo_root, args.target_columns, args.dataset_size, args.target_model, args.run_idx, args.task)
     out_path = out_dir / args.output_csv_name
     out_path.parent.mkdir(parents=True, exist_ok=True)
     pd.DataFrame([{"Epoch": best_epoch, "Val_Loss": best_val, "Test_Loss": test_mse}]).to_csv(out_path, index=False)

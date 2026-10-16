@@ -10,6 +10,10 @@ baseline_256/average/eigenvalue_regression alike), computes the actual MSE
 and resamples the (fixed) 2000 shared-test streams with replacement --n_boot
 times to get bootstrap_std.
 
+The output row also carries the run's best-val Epoch and Val_Loss, copied
+from the row of shared_test<N>/loss_history.csv that the shared-test
+evaluation scored, so every column of it means what its name says.
+
 Usage:
     python compute_bootstrap_shared_test.py \
         --repo_root .. --target_columns 3d_x_y_z --dataset_size 100 \
@@ -23,7 +27,7 @@ import pandas as pd
 from sklearn.metrics import mean_squared_error
 
 from bootstrap_uncertainty import bootstrap_mse
-from exp_paths import get_run_dir, get_results_dir
+from exp_paths import DEFAULT_TASK, TASKS, get_run_dir, get_results_dir
 
 
 def load_predictions(run_dir, eval_dataset_size):
@@ -40,10 +44,24 @@ def load_predictions(run_dir, eval_dataset_size):
     return d["prediction"].reshape(-1), d["pid"].reshape(-1)
 
 
+def best_val_row(results_dir, eval_dataset_size):
+    """(Epoch, Val_Loss) of the best-val row that the shared-test evaluation
+    scored: the only row of shared_test<N>/loss_history.csv with a Test_Loss."""
+    csv_path = results_dir / f"shared_test{eval_dataset_size}" / "loss_history.csv"
+    # utf-8-sig strips the BOM that OmniLearned CSVs start with; round_trip
+    # parses the floats exactly, so the copied Val_Loss matches bit for bit.
+    df = pd.read_csv(csv_path, encoding="utf-8-sig", float_precision="round_trip")
+    scored = df[df["Test_Loss"].notna()]
+    if len(scored) != 1:
+        raise ValueError(f"Expected exactly one row with Test_Loss in {csv_path}, found {len(scored)}")
+    return int(scored["Epoch"].iloc[0]), float(scored["Val_Loss"].iloc[0])
+
+
 def parse_args():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument('--repo_root', type=str, default="..")
     p.add_argument('--target_columns', type=str, default="3d_x_y_z")
+    p.add_argument('--task', type=str, choices=list(TASKS), default=DEFAULT_TASK)
     p.add_argument('--dataset_size', type=int, required=True)
     p.add_argument('--target_model', type=str, required=True)
     p.add_argument('--run_idxs', nargs='+', type=int, default=[0],
@@ -63,7 +81,7 @@ def main():
     output_csv_name = args.output_csv_name or f"shared_test{eval_ds}_bootstrap/loss_history.csv"
 
     for idx in args.run_idxs:
-        run_dir = get_run_dir(args.repo_root, args.target_columns, args.dataset_size, args.target_model, idx)
+        run_dir = get_run_dir(args.repo_root, args.target_columns, args.dataset_size, args.target_model, idx, args.task)
         loaded = load_predictions(run_dir, eval_ds)
         if loaded is None:
             print(f"[skip] no shared-test predictions for {run_dir}")
@@ -73,12 +91,13 @@ def main():
         boot_mses = bootstrap_mse(pred, true, args.n_boot, seed=args.seed + idx)
         bootstrap_std = float(np.std(boot_mses))
 
-        out_dir = get_results_dir(args.repo_root, args.target_columns, args.dataset_size, args.target_model, idx)
+        out_dir = get_results_dir(args.repo_root, args.target_columns, args.dataset_size, args.target_model, idx, args.task)
+        best_epoch, best_val = best_val_row(out_dir, eval_ds)
         out_path = out_dir / output_csv_name
         out_path.parent.mkdir(parents=True, exist_ok=True)
         pd.DataFrame([{
-            "Epoch": 1,
-            "Val_Loss": actual_mse,
+            "Epoch": best_epoch,
+            "Val_Loss": best_val,
             "Test_Loss": actual_mse,
             "Test_Loss_Bootstrap_Std": bootstrap_std,
         }]).to_csv(out_path, index=False)

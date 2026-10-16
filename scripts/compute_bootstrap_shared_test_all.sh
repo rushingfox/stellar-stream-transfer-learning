@@ -9,7 +9,7 @@
 # no GPU needed).
 #
 # Usage: bash scripts/compute_bootstrap_shared_test_all.sh
-# Env overrides: DATASET_SIZES (default "300 1000 10000"), RUN_IDXS (default
+# Env overrides: TASK (default prog_mass), DATASET_SIZES (default "300 1000 10000"), RUN_IDXS (default
 # "0" -- bootstrap fixes a single trained model, not a cross-seed statistic),
 # EVAL_DATASET_SIZE (default 10000), N_BOOT (default 1000)
 
@@ -20,6 +20,8 @@ mamba activate stream_transfer_learning
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(cd "${script_dir}/.." && pwd)"
+# TASK=subhalo bootstraps the subhalo_<target_columns>_<size>/ runs.
+source "${script_dir}/task_config.sh"
 
 target_columns="3d_x_y_z"
 eval_dataset_size=${EVAL_DATASET_SIZE:-10000}
@@ -57,11 +59,11 @@ models=(
 for dataset_size in "${dataset_sizes[@]}"; do
     echo "=== dataset_size=${dataset_size} ==="
     for model in "${models[@]}"; do
-        model_dir="${repo_root}/${target_columns}_${dataset_size}/${model}"
+        model_dir="${repo_root}/${task_dir_prefix}${target_columns}_${dataset_size}/${model}"
         [[ -d "${model_dir}" ]] || continue
         echo "[bootstrap] ${model}"
         python "${repo_root}/src/compute_bootstrap_shared_test.py" \
-            --repo_root "${repo_root}" --target_columns "${target_columns}" \
+            --repo_root "${repo_root}" --target_columns "${target_columns}" --task "${task}" \
             --dataset_size "${dataset_size}" --target_model "${model}" \
             --run_idxs "${run_idxs[@]}" \
             --eval_dataset_size "${eval_dataset_size}" --n_boot "${n_boot}"

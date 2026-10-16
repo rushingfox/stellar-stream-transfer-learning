@@ -10,6 +10,8 @@
 
 MODEL is the on-disk folder name; RUNS defaults to 0,1,2. Each run needs its
 shared-test evaluation and bootstrap; a missing file is an error, not a skipped run.
+--task subhalo reads the subhalo_<target_columns>_<size>/ runs and that task's
+evaluation/subhalo_labels_10000_test.npy.
 """
 import argparse
 import sys
@@ -25,12 +27,11 @@ from build_results_table import (  # noqa: E402
     load_one_run,
     summarize_model,
 )
-from exp_paths import get_loss_history_csv_path, get_model_dir, validate_dataset_size  # noqa: E402
+from exp_paths import DEFAULT_TASK, TASKS, get_loss_history_csv_path, get_model_dir, validate_dataset_size  # noqa: E402
 
 EVAL_DATASET_SIZE = 10000
 SHARED_CSV = f"shared_test{EVAL_DATASET_SIZE}/loss_history.csv"
 BOOTSTRAP_CSV = f"shared_test{EVAL_DATASET_SIZE}_bootstrap/loss_history.csv"
-LABELS_NPY = REPO_ROOT / "evaluation" / f"prog_mass_labels_{EVAL_DATASET_SIZE}_test.npy"
 # The bootstrap CSV has one pre-selected row, so no epoch cutoff is needed.
 NO_EPOCH_CUTOFF = 10**9
 
@@ -107,14 +108,19 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("specs", nargs="+", metavar="SIZE:MODEL[:RUNS]")
     parser.add_argument("--target_columns", default="3d_x_y_z")
+    parser.add_argument("--task", choices=list(TASKS), default=DEFAULT_TASK)
     args = parser.parse_args()
 
     specs = [parse_spec(s) for s in args.specs]
-    var = compute_test_label_variance_from_labels(str(LABELS_NPY))
+    labels_npy = REPO_ROOT / "evaluation" / f"{args.task}_labels_{EVAL_DATASET_SIZE}_test.npy"
+    var = compute_test_label_variance_from_labels(str(labels_npy))
+    # summarize_model() takes no task; the task's folder prefix composes with
+    # target_columns (subhalo_ + 3d_x_y_z), so pass the prefixed name throughout.
+    folder_columns = TASKS[args.task]["dir_prefix"] + args.target_columns
     for i, (size, model, runs) in enumerate(specs):
         if i:
             print()
-        report(args.target_columns, size, model, runs, var)
+        report(folder_columns, size, model, runs, var)
 
 
 if __name__ == "__main__":

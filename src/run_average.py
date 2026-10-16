@@ -3,7 +3,7 @@ import h5py
 import numpy as np
 import pandas as pd
 from pathlib import Path
-from exp_paths import VALID_DATASET_SIZES, get_dataset_dir, get_results_dir
+from exp_paths import DEFAULT_TASK, TASKS, VALID_DATASET_SIZES, find_label_key, get_dataset_dir, get_results_dir
 
 
 def parse_args():
@@ -15,6 +15,13 @@ def parse_args():
         type=str,
         default="3d_x_y_z",
         help="Feature set key, e.g. 3d_x_y_z",
+    )
+    parser.add_argument(
+        "--task",
+        type=str,
+        choices=list(TASKS),
+        default=DEFAULT_TASK,
+        help="Regression task (sets the experiment-folder prefix).",
     )
     parser.add_argument(
         "--dataset_size",
@@ -47,14 +54,14 @@ def main():
     repo_dir = Path(__file__).resolve().parent.parent
 
     # The shared DeepSets dataset for this size (only its labels are used).
-    h5_path = get_dataset_dir(repo_dir, args.target_columns, args.dataset_size) / "data" / "baseline_dataset.h5"
+    h5_path = get_dataset_dir(repo_dir, args.target_columns, args.dataset_size, args.task) / "data" / "baseline_dataset.h5"
     
     if not h5_path.exists():
         print(f"Error: H5 file not found at {h5_path}. Please generate 3D baseline data first.")
         return
 
     with h5py.File(h5_path, 'r') as f:
-        y = f['Log_Prog_Mass'][:]
+        y = f[find_label_key(f)][:]
         
     total_samples = y.shape[0]
     train_split = int(total_samples * 0.6)
@@ -73,9 +80,9 @@ def main():
         test_loss = np.mean((y_test - mean_train) ** 2)
         csv_name = "loss_history.csv"
     else:
-        eval_h5_path = get_dataset_dir(repo_dir, args.target_columns, args.eval_dataset_size) / "data" / "baseline_dataset.h5"
+        eval_h5_path = get_dataset_dir(repo_dir, args.target_columns, args.eval_dataset_size, args.task) / "data" / "baseline_dataset.h5"
         with h5py.File(eval_h5_path, 'r') as f:
-            y_eval = f['Log_Prog_Mass'][:]
+            y_eval = f[find_label_key(f)][:]
         eval_val_split = int(y_eval.shape[0] * 0.8)
         y_shared_test = y_eval[eval_val_split:]
         test_loss = np.mean((y_shared_test - mean_train) ** 2)
@@ -93,6 +100,7 @@ def main():
             args.dataset_size,
             "average",
             idx,
+            task=args.task,
         )
         out_path = res_dir / csv_name
         out_path.parent.mkdir(parents=True, exist_ok=True)

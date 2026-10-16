@@ -5,7 +5,7 @@
 # No SBATCH header: run directly on an interactive GPU node. Idempotent
 # (skips combos whose output CSV already exists; FORCE=1 to redo).
 #
-# Env overrides: DATASET_SIZES, RUN_IDXS, TARGET_MODELS, EVAL_DATASET_SIZE, FORCE.
+# Env overrides: TASK, DATASET_SIZES, RUN_IDXS, TARGET_MODELS, EVAL_DATASET_SIZE, FORCE.
 
 set -euo pipefail
 
@@ -14,13 +14,15 @@ mamba activate stream_transfer_learning
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(cd "${script_dir}/.." && pwd)"
+# TASK=subhalo evaluates the subhalo_<target_columns>_<size>/ runs on that task's shared test set.
+source "${script_dir}/task_config.sh"
 
 target_columns="3d_x_y_z"
 eval_dataset_size=${EVAL_DATASET_SIZE:-10000}
 # Nested subdir, not a flat sibling filename: omnilearned_summary.py writes
 # plots alongside --output_csv, which would clobber the run's own plots.
 output_csv_name="shared_test${eval_dataset_size}/loss_history.csv"
-shared_data_dir="${repo_root}/${target_columns}_${eval_dataset_size}/data"
+shared_data_dir="${repo_root}/${task_dir_prefix}${target_columns}_${eval_dataset_size}/data"
 
 if [[ -n "${DATASET_SIZES:-}" ]]; then
     read -r -a dataset_sizes <<< "${DATASET_SIZES}"
@@ -100,7 +102,7 @@ eval_omnilearned() {
 
     local model_size
     model_size="$(model_size_of "${run_dir}")"
-    echo "[eval] ${run_dir}  ->  ${target_columns}_${eval_dataset_size} test split (size ${model_size})"
+    echo "[eval] ${run_dir}  ->  ${task_dir_prefix}${target_columns}_${eval_dataset_size} test split (size ${model_size})"
     rm -rf "${run_dir}/shared_test${eval_dataset_size}"
     mkdir -p "${run_dir}/shared_test${eval_dataset_size}"
     (
@@ -131,7 +133,7 @@ eval_baseline() {
     local dataset_size="$1"
     local model="$2"
     local idx="$3"
-    local run_dir="${repo_root}/${target_columns}_${dataset_size}/${model}/run_${idx}"
+    local run_dir="${repo_root}/${task_dir_prefix}${target_columns}_${dataset_size}/${model}/run_${idx}"
     local out_csv="${run_dir}/results/${output_csv_name}"
 
     if [[ -f "${out_csv}" && -z "${FORCE:-}" ]]; then
@@ -139,10 +141,11 @@ eval_baseline() {
         return
     fi
 
-    echo "[eval] ${run_dir}  ->  ${target_columns}_${eval_dataset_size} test split"
+    echo "[eval] ${run_dir}  ->  ${task_dir_prefix}${target_columns}_${eval_dataset_size} test split"
     python "${repo_root}/src/eval_baseline_shared_test.py" \
         --repo_root "${repo_root}" \
         --target_columns "${target_columns}" \
+        --task "${task}" \
         --dataset_size "${dataset_size}" \
         --target_model "${model}" \
         --run_idx "${idx}" \
@@ -153,7 +156,7 @@ eval_baseline() {
 for dataset_size in "${dataset_sizes[@]}"; do
     for model in "${omnilearned_models[@]}"; do
         for idx in "${run_idxs[@]}"; do
-            eval_omnilearned "${repo_root}/${target_columns}_${dataset_size}/${model}/run_${idx}"
+            eval_omnilearned "${repo_root}/${task_dir_prefix}${target_columns}_${dataset_size}/${model}/run_${idx}"
         done
     done
     for model in "${baseline_models[@]}"; do
