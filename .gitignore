@@ -14,10 +14,12 @@ __pycache__/
 # build artifact from `pip install -e .`
 *.egg-info/
 
-# experiment run folders (<target_columns>_<dataset_size>/)
+# experiment run folders (<target_columns>_<dataset_size>/, and
+# subhalo_<target_columns>_<dataset_size>/ for the subhalo task)
 3d_*/
 4d_*/
 6d_*/
+subhalo_*/
 
 # ...except: track the small per-run result files (loss curves, shared-test
 # predictions) even though the run folders themselves are gitignored above --
@@ -28,15 +30,19 @@ __pycache__/
 !3d_*/
 !4d_*/
 !6d_*/
+!subhalo_*/
 !3d_*/**/
 !4d_*/**/
 !6d_*/**/
+!subhalo_*/**/
 !3d_*/**/*.csv
 !3d_*/**/*.npz
 !4d_*/**/*.csv
 !4d_*/**/*.npz
 !6d_*/**/*.csv
 !6d_*/**/*.npz
+!subhalo_*/**/*.csv
+!subhalo_*/**/*.npz
 # Un-ignoring the directories above makes every OTHER file inside them
 # visible again too (png/json/txt/..., not just csv/npz), since those
 # extensions were never ignored by a rule of their own -- they only rode
@@ -57,6 +63,10 @@ __pycache__/
 6d_*/**/*.json
 6d_*/**/*.txt
 6d_*/**/*.npy
+subhalo_*/**/*.png
+subhalo_*/**/*.json
+subhalo_*/**/*.txt
+subhalo_*/**/*.npy
 
 # ...except: track the loss/R^2 curves from geometric proxy PRETRAINING
 # specifically (one run per proxy, not one per seed) -- these demonstrate
@@ -79,6 +89,7 @@ __pycache__/
 !3d_*/**/hparams.json
 !4d_*/**/hparams.json
 !6d_*/**/hparams.json
+!subhalo_*/**/hparams.json
 
 # raw data folders
 raw_data*/
