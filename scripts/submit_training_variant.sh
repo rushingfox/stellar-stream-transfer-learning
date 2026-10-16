@@ -97,6 +97,8 @@ fi
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo_dir="$(cd "${script_dir}/.." && pwd)"
+# TASK=subhalo trains under subhalo_<target_columns>_<size>/.
+source "${script_dir}/task_config.sh"
 
 sbatch_args=()
 if [[ -n "${SBATCH_QOS:-}" ]]; then
@@ -132,7 +134,7 @@ for idx in "${submit_idxs[@]}"; do
         job_name="${variant}_${idx}${model_suffix}"
     fi
 
-    run_dir="${repo_dir}/${target_columns[$idx]}_${dataset_size}/${model_dir}"
+    run_dir="${repo_dir}/${task_dir_prefix}${target_columns[$idx]}_${dataset_size}/${model_dir}"
     mkdir -p "${run_dir}/logs"
     (
         cd "${run_dir}"

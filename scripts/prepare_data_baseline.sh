@@ -46,7 +46,9 @@ else
     dataset_sizes=("${dataset_sizes_default[@]}")
 fi
 
-raw_data_prefix=${RAW_DATA_PREFIX:-"prog_mass_reg_dataset"}
+# TASK=subhalo writes subhalo_<target_columns>_<size>/ from the subhalo raw data.
+source ./task_config.sh
+raw_data_prefix=${RAW_DATA_PREFIX:-"${task_raw_prefix}"}
 
 # Every DeepSets width (baseline, baseline_256, baseline_1024, ...) trains on the
 # IDENTICAL data, so it is written ONCE per (target_columns, dataset_size) into
@@ -55,7 +57,8 @@ raw_data_prefix=${RAW_DATA_PREFIX:-"prog_mass_reg_dataset"}
 for dataset_size in "${dataset_sizes[@]}"; do
     input_raw="../raw_data/${raw_data_prefix}_${dataset_size}.h5"
     for tc in "${target_columns[@]}"; do
-        shared_dir="../${tc}_${dataset_size}/data"
+        dataset_dir="../${task_dir_prefix}${tc}_${dataset_size}"
+        shared_dir="${dataset_dir}/data"
         if [[ -f "${shared_dir}/baseline_dataset.h5" ]]; then
             echo "Shared baseline data already exists at ${shared_dir}, skipping ${tc} size=${dataset_size}"
             continue
@@ -67,9 +70,10 @@ for dataset_size in "${dataset_sizes[@]}"; do
             --dataset_size "$dataset_size" \
             --target_model "baseline" \
             --output_model "_shared_baseline_tmp" \
-            --target_columns "$tc"
+            --target_columns "$tc" \
+            --task "${task}"
         mkdir -p "${shared_dir}"
-        mv "../${tc}_${dataset_size}/_shared_baseline_tmp/data/baseline_dataset.h5" "${shared_dir}/"
-        rmdir "../${tc}_${dataset_size}/_shared_baseline_tmp/data" "../${tc}_${dataset_size}/_shared_baseline_tmp" 2>/dev/null || true
+        mv "${dataset_dir}/_shared_baseline_tmp/data/baseline_dataset.h5" "${shared_dir}/"
+        rmdir "${dataset_dir}/_shared_baseline_tmp/data" "${dataset_dir}/_shared_baseline_tmp" 2>/dev/null || true
     done
 done

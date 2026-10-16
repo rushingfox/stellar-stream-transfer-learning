@@ -7,7 +7,7 @@ import time
 import datetime
 from tqdm import tqdm
 import sys
-from exp_paths import VALID_DATASET_SIZES, dataset_key, get_data_dir
+from exp_paths import DEFAULT_TASK, TASKS, VALID_DATASET_SIZES, dataset_key, get_data_dir
 
 
 def parse_args():
@@ -17,6 +17,8 @@ def parse_args():
     parser.add_argument('--dataset_size', type=int, choices=VALID_DATASET_SIZES, required=True)
     parser.add_argument('--target_model', type=str, choices=['baseline', 'baseline_256', 'omnilearned'], required=True)
     parser.add_argument('--output_model', type=str, default="", help="Optional model folder name override for saving outputs")
+    parser.add_argument('--task', type=str, choices=list(TASKS), default=DEFAULT_TASK,
+                        help="Regression task: sets the output folder prefix and the baseline label key")
     parser.add_argument('--target_columns', type=str, choices=['3d_x_y_z', '3d_ra_dec_parallax', '4d_x_y_z_vtotal', '4d_ra_dec_parallax_vtotal', '6d_x_y_z_vx_vy_vz', '6d_ra_dec_parallax_proper_motions', '3d_proxy_ellipsoid', '3d_proxy_cube', '3d_proxy_bounded_ball', '3d_proxy_gaussian_ball', '3d_proxy_hard_ellipsoid', '3d_proxy_box', '3d_x_y_z_eigenvalues'], required=True)
 
     args = parser.parse_args()
@@ -51,7 +53,7 @@ def validate_input_raw_size(input_raw, dataset_size):
             f"but found {actual_size} samples in {input_raw}."
         )
 
-def process_baseline(input_raw, output_dir, target_columns):
+def process_baseline(input_raw, output_dir, target_columns, label_key):
     p = Path(output_dir)
     p.mkdir(parents=True, exist_ok=True)
     output_file = p / "baseline_dataset.h5"
@@ -81,7 +83,7 @@ def process_baseline(input_raw, output_dir, target_columns):
 
     with h5py.File(output_file, 'w') as out_f:
         out_f.create_dataset('raw_data', data=raw_data, compression="gzip")
-        out_f.create_dataset('Log_Prog_Mass', data=pid_reg_ds, compression="gzip")
+        out_f.create_dataset(label_key, data=pid_reg_ds, compression="gzip")
     print(f"Created {output_file} with raw_data of {raw_data.shape} and pid_reg_ds of {pid_reg_ds.shape}")
 
 def process_omnilearned(input_raw, output_dir, target_columns):
@@ -507,12 +509,13 @@ if __name__ == "__main__":
         args.target_columns,
         args.dataset_size,
         model_for_path,
+        task=args.task,
     )
     output_dir.mkdir(parents=True, exist_ok=True)
     print(f"[*] Output directory: {output_dir}")
-    
+
     if args.target_model == 'baseline' or args.target_model == 'baseline_256':
-        process_baseline(args.input_raw, output_dir, args.target_columns)
+        process_baseline(args.input_raw, output_dir, args.target_columns, TASKS[args.task]["label_key"])
     elif "omni" in args.target_model:
         process_omnilearned(args.input_raw, output_dir, args.target_columns)
         
@@ -523,7 +526,7 @@ if __name__ == "__main__":
     print("-" * 50)
     print(
         f"Data preparation for {model_for_path} "
-        f"with {dataset_key(args.target_columns, args.dataset_size)} finished!"
+        f"with {dataset_key(args.target_columns, args.dataset_size, args.task)} finished!"
     )
     print(f"Total time elapsed: {formatted_time} (Total {total_duration:.2f} seconds)")
     print("-" * 50)

@@ -5,6 +5,8 @@ import torch
 from torch.utils.data import Dataset
 from sklearn.model_selection import train_test_split
 
+from exp_paths import find_label_key
+
 
 class StreamDataset(Dataset):
     def __init__(self, h5_path, INPUT_DIM, mode='train'):
@@ -16,7 +18,8 @@ class StreamDataset(Dataset):
             raise FileNotFoundError(f"file not found: {h5_path}")
 
         with h5py.File(h5_path, 'r') as f:
-            total_samples = f['Log_Prog_Mass'].shape[0]
+            self.label_key = find_label_key(f)
+            total_samples = f[self.label_key].shape[0]
             
             train_split = int(total_samples * 0.6)
             val_split = int(total_samples * 0.8)
@@ -51,7 +54,7 @@ class StreamDataset(Dataset):
             self.file = h5py.File(self.h5_path, 'r')
 
         real_idx = self.active_indices[idx]
-        label = torch.tensor(self.file['Log_Prog_Mass'][real_idx], dtype=torch.float32)
+        label = torch.tensor(self.file[self.label_key][real_idx], dtype=torch.float32)
 
         data = torch.tensor(self.file['raw_data'][real_idx], dtype=torch.float32)
         if hasattr(self, 'mean'):

@@ -63,7 +63,9 @@ script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo_dir="$(cd "${script_dir}/../.." && pwd)"
 
 pretrain_ckpt="${repo_dir}/omnicosmos_checkpoints/best_model_${pretrain_tag}.pt"
-dataset_dir="${repo_dir}/${target_column}_${dataset_size}"
+# TASK=subhalo trains under subhalo_<target_column>_<size>/.
+source "${script_dir}/../task_config.sh"
+dataset_dir="${repo_dir}/${task_dir_prefix}${target_column}_${dataset_size}"
 run_dir="${dataset_dir}/${model}"
 
 if [[ ! -f "${pretrain_ckpt}" ]]; then

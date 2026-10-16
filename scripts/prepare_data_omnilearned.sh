@@ -49,12 +49,14 @@ else
     dataset_sizes=("${dataset_sizes_default[@]}")
 fi
 
-raw_data_prefix=${RAW_DATA_PREFIX:-"prog_mass_reg_dataset"}
+# TASK=subhalo writes subhalo_<target_columns>_<size>/ from the subhalo raw data.
+source ./task_config.sh
+raw_data_prefix=${RAW_DATA_PREFIX:-"${task_raw_prefix}"}
 
 for dataset_size in "${dataset_sizes[@]}"; do
     input_raw="../raw_data/${raw_data_prefix}_${dataset_size}.h5"
     for tc in "${target_columns[@]}"; do
-        dataset_dir="../${tc}_${dataset_size}"
+        dataset_dir="../${task_dir_prefix}${tc}_${dataset_size}"
         if [[ -d "${dataset_dir}/data/streams/train" ]]; then
             echo "Shared data already exists at ${dataset_dir}/data, skipping ${tc} size=${dataset_size}"
             continue
@@ -66,7 +68,8 @@ for dataset_size in "${dataset_sizes[@]}"; do
             --dataset_size "$dataset_size" \
             --target_model "omnilearned" \
             --output_model "_shared_data_tmp" \
-            --target_columns "$tc"
+            --target_columns "$tc" \
+            --task "${task}"
         mv "${dataset_dir}/_shared_data_tmp/data" "${dataset_dir}/data"
         rmdir "${dataset_dir}/_shared_data_tmp" 2>/dev/null || true
     done

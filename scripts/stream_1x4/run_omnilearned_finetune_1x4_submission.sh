@@ -60,7 +60,9 @@ job_name="o_ft${model_suffix}"
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo_dir="$(cd "${script_dir}/../.." && pwd)"
 
-dataset_dir="${repo_dir}/${target_column}_${dataset_size}"
+# TASK=subhalo trains under subhalo_<target_column>_<size>/.
+source "${script_dir}/../task_config.sh"
+dataset_dir="${repo_dir}/${task_dir_prefix}${target_column}_${dataset_size}"
 run_dir="${dataset_dir}/${model}"
 
 if [[ ! -d "${dataset_dir}/data/streams/train" ]]; then
