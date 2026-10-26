@@ -1,6 +1,7 @@
 #!/bin/bash
 # Bootstrap error bar (test-set resampling of a single fixed run) for every
-# checkpoint-based + non-ML model, on the shared_test10000 predictions. See
+# checkpoint-based + non-ML model, on the shared_test10000 predictions; writes
+# run_<idx>/shared_test10000/bootstrap.csv. See
 # src/compute_bootstrap_shared_test.py for the method. Requires each run's
 # predictions.npz / outputs__streams_0.npz -- run eval_shared_test10000.sh /
 # eval_shared_test10000_nonML.sh first if this skips everything.
@@ -20,7 +21,7 @@ mamba activate stream_transfer_learning
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(cd "${script_dir}/.." && pwd)"
-# TASK=subhalo bootstraps the subhalo_<target_columns>_<size>/ runs.
+# TASK picks the runs (prog_mass_ or subhalo_<target_columns>_<size>/).
 source "${script_dir}/task_config.sh"
 
 target_columns="3d_x_y_z"
@@ -40,18 +41,18 @@ else
 fi
 
 models=(
-    "omnilearned_scratch_1x4"
-    "omnilearned_finetune_1x4"
-    "omnicosmos_camels_finetune_1x4"
-    "omnicosmos_quijote_finetune_1x4"
-    "omnilearned_proxy_cube_finetune_1x4"
-    "omnilearned_proxy_bounded_ball_finetune_1x4"
-    "omnilearned_proxy_gaussian_ball_finetune_1x4"
-    "omnilearned_proxy_gaussian_ellipsoid_sigmax_finetune_1x4"
-    "omnilearned_proxy_bounded_ellipsoid_a_finetune_1x4"
-    "omnilearned_proxy_box_a_finetune_1x4"
-    "omnilearned_proxy_eigen_lambda1_finetune_1x4"
-    "baseline_256"
+    "omnilearned_scratch"
+    "omnilearned_jet_finetune"
+    "omnicosmos_camels_finetune"
+    "omnicosmos_quijote_finetune"
+    "omnilearned_proxy_cube_finetune"
+    "omnilearned_proxy_bounded_ball_finetune"
+    "omnilearned_proxy_gaussian_ball_finetune"
+    "omnilearned_proxy_gaussian_ellipsoid_sigmax_finetune"
+    "omnilearned_proxy_bounded_ellipsoid_a_finetune"
+    "omnilearned_proxy_box_a_finetune"
+    "omnilearned_proxy_eigen_lambda1_finetune"
+    "deepsets"
     "average"
     "eigenvalue_regression"
 )

@@ -13,12 +13,12 @@ BASE_IDX=${BASE_IDX:-0}
 CURRENT_IDX=$((BASE_IDX + SLURM_ARRAY_TASK_ID))
 
 INPUT_DIMS=(3 3 4 4 6 6)
-# Shared per-size dataset (<target_columns>_<size>/data/), relative to run_N/.
-H5_FILE=${H5_FILE:-../../data/baseline_dataset.h5}
+# Shared per-size dataset (<task>_<target_columns>_<size>/data/), relative to run_N/.
+H5_FILE=${H5_FILE:-../../data/deepsets_dataset.h5}
 # EPOCH_NUM is the name the OmniLearned submission scripts use; accept either.
 EPOCHS=${EPOCHS:-${EPOCH_NUM:-50}}
 BATCH_SIZE=${BATCH_SIZE:-32}
-HIDDEN_DIM=${HIDDEN_DIM:-128}
+HIDDEN_DIM=${HIDDEN_DIM:-1024}
 
 echo "Starting Array Task ID: ${SLURM_ARRAY_TASK_ID}"
 echo "Running experiment with run_idx: ${CURRENT_IDX}"

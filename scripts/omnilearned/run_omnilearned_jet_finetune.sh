@@ -5,14 +5,14 @@
 # separately further-finetunes this same base checkpoint on cosmological sims,
 # which is a different, out-of-scope thing).
 #
-# Unlike run_omnilearned_proxy_finetune_1x4.sh, there is NO checkpoint-copy
+# Unlike run_omnilearned_proxy_finetune.sh, there is NO checkpoint-copy
 # step here: pretrain_s is resolved/downloaded by OmniLearned itself, not
 # copied in from a local proxy-pretrain run dir.
 #
 # Works in TWO modes:
-#   1) sbatch mode: submitted via _1x4_submission.sh; SBATCH headers are used.
+#   1) sbatch mode: submitted via its _submission.sh wrapper; SBATCH headers are used.
 #   2) bash mode:   run directly inside a JupyterHub Exclusive GPU session with
-#                   `bash run_omnilearned_finetune_1x4.sh <num_feat> <epoch_num>`
+#                   `bash run_omnilearned_jet_finetune.sh <num_feat> <epoch_num>`
 #                   from the finetune dir's run_N subdirectory.
 #
 # Launcher: torchrun. All hparams stay at OmniLearned CLI defaults.

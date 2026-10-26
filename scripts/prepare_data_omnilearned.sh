@@ -28,7 +28,7 @@ export HDF5_USE_FILE_LOCKING=FALSE
 # jet-pretrain finetune — trains/evaluates on the IDENTICAL real-stream data
 # (only the initialization checkpoint differs). It is therefore generated
 # ONCE per (target_columns, dataset_size) into a shared
-# "<target_columns>_<size>/data/" dir, which every _1x4 runner script reads
+# "<task>_<target_columns>_<size>/data/" dir, which every OmniLearned runner reads
 # from via "--path ../../data" relative to its own run_N/.
 target_columns_default=(
     "3d_x_y_z"
@@ -49,7 +49,7 @@ else
     dataset_sizes=("${dataset_sizes_default[@]}")
 fi
 
-# TASK=subhalo writes subhalo_<target_columns>_<size>/ from the subhalo raw data.
+# TASK picks the folder prefix and raw data (prog_mass_ or subhalo_<target_columns>_<size>/).
 source ./task_config.sh
 raw_data_prefix=${RAW_DATA_PREFIX:-"${task_raw_prefix}"}
 

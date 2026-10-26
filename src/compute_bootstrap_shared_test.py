@@ -6,18 +6,19 @@ For each of --run_idxs (default just run_0, since bootstrap fixes one
 trained model and resamples its test set -- it isn't a cross-seed
 statistic): loads that run's shared-test predictions (works for
 OmniLearned-family checkpoints and
-baseline_256/average/eigenvalue_regression alike), computes the actual MSE
+DeepSets/average/eigenvalue_regression alike), computes the actual MSE
 and resamples the (fixed) 2000 shared-test streams with replacement --n_boot
 times to get bootstrap_std.
 
-The output row also carries the run's best-val Epoch and Val_Loss, copied
-from the row of shared_test<N>/loss_history.csv that the shared-test
-evaluation scored, so every column of it means what its name says.
+The output, run_<idx>/shared_test<N>/bootstrap.csv, is one row that also
+carries the run's best-val Epoch and Val_Loss, copied from the row of
+shared_test<N>/loss_history.csv that the shared-test evaluation scored, so
+every column of it means what its name says.
 
 Usage:
     python compute_bootstrap_shared_test.py \
         --repo_root .. --target_columns 3d_x_y_z --dataset_size 100 \
-        --target_model omnilearned_proxy_cube_finetune_1x4 --run_idxs 0
+        --target_model omnilearned_proxy_cube_finetune --run_idxs 0
 """
 import argparse
 import os
@@ -27,14 +28,15 @@ import pandas as pd
 from sklearn.metrics import mean_squared_error
 
 from bootstrap_uncertainty import bootstrap_mse
-from exp_paths import DEFAULT_TASK, TASKS, get_run_dir, get_results_dir
+from exp_paths import BOOTSTRAP_CSV, DEFAULT_TASK, SHARED_TEST_CSV, TASKS, get_run_dir, shared_test_dirname
 
 
 def load_predictions(run_dir, eval_dataset_size):
     """Returns (prediction, truth) 1-D arrays for the shared test split, or
     None if this run has no shared-test predictions saved yet."""
-    omni_path = os.path.join(str(run_dir), f"shared_test{eval_dataset_size}", "outputs__streams_0.npz")
-    generic_path = os.path.join(str(run_dir), "results", f"shared_test{eval_dataset_size}", "predictions.npz")
+    shared_dir = os.path.join(str(run_dir), shared_test_dirname(eval_dataset_size))
+    omni_path = os.path.join(shared_dir, "outputs__streams_0.npz")
+    generic_path = os.path.join(shared_dir, "predictions.npz")
     if os.path.exists(omni_path):
         d = np.load(omni_path)
     elif os.path.exists(generic_path):
@@ -44,10 +46,10 @@ def load_predictions(run_dir, eval_dataset_size):
     return d["prediction"].reshape(-1), d["pid"].reshape(-1)
 
 
-def best_val_row(results_dir, eval_dataset_size):
+def best_val_row(shared_dir):
     """(Epoch, Val_Loss) of the best-val row that the shared-test evaluation
     scored: the only row of shared_test<N>/loss_history.csv with a Test_Loss."""
-    csv_path = results_dir / f"shared_test{eval_dataset_size}" / "loss_history.csv"
+    csv_path = shared_dir / SHARED_TEST_CSV
     # utf-8-sig strips the BOM that OmniLearned CSVs start with; round_trip
     # parses the floats exactly, so the copied Val_Loss matches bit for bit.
     df = pd.read_csv(csv_path, encoding="utf-8-sig", float_precision="round_trip")
@@ -70,15 +72,12 @@ def parse_args():
     p.add_argument('--eval_dataset_size', type=int, default=10000)
     p.add_argument('--n_boot', type=int, default=1000)
     p.add_argument('--seed', type=int, default=0)
-    p.add_argument('--output_csv_name', type=str, default=None,
-                    help="Default: shared_test<eval_dataset_size>_bootstrap/loss_history.csv")
     return p.parse_args()
 
 
 def main():
     args = parse_args()
     eval_ds = args.eval_dataset_size
-    output_csv_name = args.output_csv_name or f"shared_test{eval_ds}_bootstrap/loss_history.csv"
 
     for idx in args.run_idxs:
         run_dir = get_run_dir(args.repo_root, args.target_columns, args.dataset_size, args.target_model, idx, args.task)
@@ -91,10 +90,9 @@ def main():
         boot_mses = bootstrap_mse(pred, true, args.n_boot, seed=args.seed + idx)
         bootstrap_std = float(np.std(boot_mses))
 
-        out_dir = get_results_dir(args.repo_root, args.target_columns, args.dataset_size, args.target_model, idx, args.task)
-        best_epoch, best_val = best_val_row(out_dir, eval_ds)
-        out_path = out_dir / output_csv_name
-        out_path.parent.mkdir(parents=True, exist_ok=True)
+        shared_dir = run_dir / shared_test_dirname(eval_ds)
+        best_epoch, best_val = best_val_row(shared_dir)
+        out_path = shared_dir / BOOTSTRAP_CSV
         pd.DataFrame([{
             "Epoch": best_epoch,
             "Val_Loss": best_val,

@@ -9,6 +9,7 @@ cd ../raw_data
 mkdir -p logs
 
 declare -A TIME_LIMITS
+TIME_LIMITS[40]="00:30:00"
 TIME_LIMITS[100]="00:30:00"
 TIME_LIMITS[300]="00:30:00"
 TIME_LIMITS[1000]="1:00:00"

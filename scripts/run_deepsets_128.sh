@@ -28,7 +28,7 @@ export OMP_NUM_THREADS=1
 export MKL_NUM_THREADS=1
 
 DATA_IDX=${1:?Error: please provide index 0/1/2/3/4/5}
-common_script="${submit_dir}/../../scripts/run_baseline_train_common.sh"
+common_script="${submit_dir}/../../scripts/run_deepsets_train_common.sh"
 if [[ ! -f "$common_script" ]]; then
     echo "Error: cannot find helper script at ${common_script}" >&2
     exit 1

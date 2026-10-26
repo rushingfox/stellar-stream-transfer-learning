@@ -2,61 +2,44 @@
 
 set -euo pipefail
 
-variant=${1:?Error: please provide variant baseline/baseline_256/baseline_1024}
+variant=${1:?Error: please provide variant deepsets/deepsets_256/deepsets_128}
 
+# deepsets (hidden 1024, 1,252,481 params) is the default DeepSets; the
+# narrower widths keep a _<width> suffix.
 case "$variant" in
-    baseline)
-        model_dir="baseline"
-        run_script="run_baseline.sh"
-        names_default=("b_3d_xyz" "b_3d_radec" "b_4d_xyz" "b_4d_radec" "b_6d_xyz" "b_6d_radec")
-        target_columns_default=(
-            "3d_x_y_z"
-            "3d_ra_dec_parallax"
-            "4d_x_y_z_vtotal"
-            "4d_ra_dec_parallax_vtotal"
-            "6d_x_y_z_vx_vy_vz"
-            "6d_ra_dec_parallax_proper_motions"
-        )
-        submit_idxs_default=(0)
+    deepsets)
+        model_dir="deepsets"
+        run_script="run_deepsets.sh"
+        names_prefix="ds"
         ;;
-    baseline_256)
-        model_dir="baseline_256"
-        run_script="run_baseline_256.sh"
-        names_default=("b256_3d_xyz" "b256_3d_radec" "b256_4d_xyz" "b256_4d_radec" "b256_6d_xyz" "b256_6d_radec")
-        target_columns_default=(
-            "3d_x_y_z"
-            "3d_ra_dec_parallax"
-            "4d_x_y_z_vtotal"
-            "4d_ra_dec_parallax_vtotal"
-            "6d_x_y_z_vx_vy_vz"
-            "6d_ra_dec_parallax_proper_motions"
-        )
-        submit_idxs_default=(0)
+    deepsets_256)
+        model_dir="deepsets_256"
+        run_script="run_deepsets_256.sh"
+        names_prefix="ds256"
         ;;
-    baseline_1024)
-        # Hidden 1024 -> 1,252,481 params, ~90% of OmniLearned-s on this task
-        # (1,389,477): the "same size, different architecture" control.
-        model_dir="baseline_1024"
-        run_script="run_baseline_1024.sh"
-        names_default=("b1024_3d_xyz" "b1024_3d_radec" "b1024_4d_xyz" "b1024_4d_radec" "b1024_6d_xyz" "b1024_6d_radec")
-        target_columns_default=(
-            "3d_x_y_z"
-            "3d_ra_dec_parallax"
-            "4d_x_y_z_vtotal"
-            "4d_ra_dec_parallax_vtotal"
-            "6d_x_y_z_vx_vy_vz"
-            "6d_ra_dec_parallax_proper_motions"
-        )
-        submit_idxs_default=(0)
+    deepsets_128)
+        model_dir="deepsets_128"
+        run_script="run_deepsets_128.sh"
+        names_prefix="ds128"
         ;;
     *)
         echo "Error: unsupported variant='$variant'." >&2
         exit 1
         ;;
 esac
+names_default=("${names_prefix}_3d_xyz" "${names_prefix}_3d_radec" "${names_prefix}_4d_xyz" "${names_prefix}_4d_radec" "${names_prefix}_6d_xyz" "${names_prefix}_6d_radec")
+target_columns_default=(
+    "3d_x_y_z"
+    "3d_ra_dec_parallax"
+    "4d_x_y_z_vtotal"
+    "4d_ra_dec_parallax_vtotal"
+    "6d_x_y_z_vx_vy_vz"
+    "6d_ra_dec_parallax_proper_motions"
+)
+submit_idxs_default=(0)
 
 dataset_size=${DATASET_SIZE:-1000}
-# Appended to the model folder (and job name), e.g. _ep100 -> baseline_256_ep100,
+# Appended to the model folder (and job name), e.g. _lr1e-4 -> deepsets_lr1e-4,
 # so a run with different settings lands in its own folder instead of the
 # existing one. Empty by default: the folder names stay exactly as before.
 model_suffix=${MODEL_SUFFIX:-}
@@ -106,11 +89,11 @@ if [[ -n "${SBATCH_QOS:-}" ]]; then
 fi
 sbatch_time="${SBATCH_TIME:-}"
 if [[ -z "$sbatch_time" ]]; then
-    case "${variant}:${dataset_size}" in
-        baseline:100|baseline:300|baseline:1000|baseline_256:100|baseline_256:300|baseline_256:1000|baseline_1024:100|baseline_1024:300|baseline_1024:1000)
+    case "${dataset_size}" in
+        100|300|1000)
             sbatch_time="00:30:00"
             ;;
-        baseline:10000|baseline_256:10000|baseline_1024:10000)
+        10000)
             sbatch_time="05:00:00"
             ;;
     esac

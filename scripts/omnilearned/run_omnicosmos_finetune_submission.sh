@@ -3,7 +3,7 @@
 # Quijote pretrain, finetuned on the stream mass-regression task) — a borrowed
 # pretrain-weights comparison row, same category as the jet-pretrain finetune.
 #
-# Reuses run_omnilearned_proxy_finetune_1x4.sh directly (no new runner script
+# Reuses run_omnilearned_proxy_finetune.sh directly (no new runner script
 # needed): its checkpoint-copy-by-tag + torchrun train/evaluate logic is
 # identical for any pretrain source, proxy or OmniCosmos alike.
 #
@@ -13,7 +13,7 @@
 #      at the dataset level, <target_columns>_<size>/data/ — no per-model
 #      data/ needed)
 #   2) mkdir run_0 && cd run_0
-#   3) bash <path>/run_omnilearned_proxy_finetune_1x4.sh <num_feat> <pretrain_tag> <epoch_num>
+#   3) bash <path>/run_omnilearned_proxy_finetune.sh <num_feat> <pretrain_tag> <epoch_num>
 #
 # Required env:
 #   PRETRAIN_SOURCE   "camels" or "quijote"
@@ -24,7 +24,7 @@
 #                         independent of our stream DATASET_SIZE below)
 #   DATASET_SIZE          default 10000 (the stream finetune dataset size)
 #   EPOCH_NUM             default 50
-#   MODEL_SUFFIX          default "_1x4" (finetune dir gets this appended)
+#   MODEL_SUFFIX          default "" (appended to the finetune dir)
 #   SBATCH_QOS / SBATCH_TIME / SBATCH_ARRAY
 
 set -euo pipefail
@@ -32,7 +32,7 @@ set -euo pipefail
 pretrain_source=${PRETRAIN_SOURCE:?Error: set PRETRAIN_SOURCE (camels or quijote)}
 dataset_size=${DATASET_SIZE:-10000}
 epoch_num=${EPOCH_NUM:-50}
-model_suffix=${MODEL_SUFFIX:-_1x4}
+model_suffix=${MODEL_SUFFIX:-}
 
 case "${pretrain_source}" in
     camels)  default_checkpoint_size=600 ;;
@@ -104,6 +104,6 @@ EOF
 (
     cd "${run_dir}"
     sbatch "${sbatch_args[@]}" --job-name="${job_name}" \
-        "${script_dir}/run_omnilearned_proxy_finetune_1x4.sh" \
+        "${script_dir}/run_omnilearned_proxy_finetune.sh" \
         "3" "${pretrain_tag}" "${epoch_num}"
 )

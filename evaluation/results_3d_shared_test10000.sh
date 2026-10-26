@@ -37,7 +37,7 @@ script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 bootstrap=${BOOTSTRAP:-true}
 # NESTED_ERROR=true draws two error bars per point (stat (+) syst, in
 # quadrature): outer = total, inner = mean bootstrap std across seeds. It
-# always reads from the same shared_test<N>_bootstrap/loss_history.csv as
+# always reads from the same shared_test<N>/bootstrap.csv as
 # BOOTSTRAP=true (so it implies bootstrap=true), but -- unlike plain
 # BOOTSTRAP=true, which fixes a single run_idx -- it needs every seed's own
 # point estimate (for the cross-seed/"systematic" spread) AND every seed's
@@ -62,8 +62,9 @@ else
 fi
 
 eval_dataset_size=${EVAL_DATASET_SIZE:-10000}
+# Relative to each run_<idx>/ dir.
 if [[ "${bootstrap}" == "true" ]]; then
-    test_csv_name="shared_test${eval_dataset_size}_bootstrap/loss_history.csv"
+    test_csv_name="shared_test${eval_dataset_size}/bootstrap.csv"
 else
     test_csv_name="shared_test${eval_dataset_size}/loss_history.csv"
 fi
@@ -85,19 +86,19 @@ else
     models=()
     for dataset_size in "${agg_dataset_sizes[@]}"; do
         models+=(
-            "3d_x_y_z:${dataset_size}:omnicosmos_camels_finetune_1x4:OmniCosmos_CAMELS"
-            "3d_x_y_z:${dataset_size}:omnicosmos_quijote_finetune_1x4:OmniCosmos_Quijote"
-            "3d_x_y_z:${dataset_size}:baseline_256:DeepSets_256"
+            "3d_x_y_z:${dataset_size}:omnicosmos_camels_finetune:OmniCosmos_CAMELS"
+            "3d_x_y_z:${dataset_size}:omnicosmos_quijote_finetune:OmniCosmos_Quijote"
+            "3d_x_y_z:${dataset_size}:deepsets_256:DeepSets_256"
             "3d_x_y_z:${dataset_size}:eigenvalue_regression"
-            "3d_x_y_z:${dataset_size}:omnilearned_scratch_1x4:OmniLearned_Scratch"
-            "3d_x_y_z:${dataset_size}:omnilearned_finetune_1x4:OmniLearned_Finetune"
-            "3d_x_y_z:${dataset_size}:omnilearned_proxy_cube_finetune_1x4:proxy_cube"
-            "3d_x_y_z:${dataset_size}:omnilearned_proxy_bounded_ball_finetune_1x4:proxy_bounded_ball"
-            "3d_x_y_z:${dataset_size}:omnilearned_proxy_gaussian_ball_finetune_1x4:proxy_gaussian_ball"
-            "3d_x_y_z:${dataset_size}:omnilearned_proxy_gaussian_ellipsoid_sigmax_finetune_1x4:proxy_gaussian_ellipsoid_sigmax"
-            "3d_x_y_z:${dataset_size}:omnilearned_proxy_bounded_ellipsoid_a_finetune_1x4:proxy_bounded_ellipsoid_a"
-            "3d_x_y_z:${dataset_size}:omnilearned_proxy_box_a_finetune_1x4:proxy_box_a"
-            "3d_x_y_z:${dataset_size}:omnilearned_proxy_eigen_lambda1_finetune_1x4:proxy_stream_eigenvalues_lambda1"
+            "3d_x_y_z:${dataset_size}:omnilearned_scratch:OmniLearned_Scratch"
+            "3d_x_y_z:${dataset_size}:omnilearned_jet_finetune:OmniLearned_Finetune"
+            "3d_x_y_z:${dataset_size}:omnilearned_proxy_cube_finetune:proxy_cube"
+            "3d_x_y_z:${dataset_size}:omnilearned_proxy_bounded_ball_finetune:proxy_bounded_ball"
+            "3d_x_y_z:${dataset_size}:omnilearned_proxy_gaussian_ball_finetune:proxy_gaussian_ball"
+            "3d_x_y_z:${dataset_size}:omnilearned_proxy_gaussian_ellipsoid_sigmax_finetune:proxy_gaussian_ellipsoid_sigmax"
+            "3d_x_y_z:${dataset_size}:omnilearned_proxy_bounded_ellipsoid_a_finetune:proxy_bounded_ellipsoid_a"
+            "3d_x_y_z:${dataset_size}:omnilearned_proxy_box_a_finetune:proxy_box_a"
+            "3d_x_y_z:${dataset_size}:omnilearned_proxy_eigen_lambda1_finetune:proxy_stream_eigenvalues_lambda1"
         )
         # "average" (predict-the-training-mean dummy) is only informative
         # under MSE -- under R^2 it's ~0 by construction (R^2 = 1 - MSE/Var),

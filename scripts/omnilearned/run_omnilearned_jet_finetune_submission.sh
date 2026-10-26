@@ -1,26 +1,31 @@
 #!/bin/bash
-# Sbatch wrapper for the 1x4 real-data scratch (no-pretrain) runner.
+# Sbatch wrapper for the 1x4 finetune-from-OmniLearned's-own-pretrain_s runner
+# (jet-physics baseline; NOT OmniCosmos — see run_omnilearned_jet_finetune.sh
+# header for the provenance distinction).
 #
 # For JupyterHub interactive use, DO NOT invoke this wrapper. Instead:
 #   1) mkdir run_0 && cd run_0
-#   2) bash <path>/run_omnilearned_scratch_1x4.sh <num_feat> <epoch_num>
+#   2) bash <path>/run_omnilearned_jet_finetune.sh <num_feat> <epoch_num>
+#
+# No PRETRAIN_CKPT/checkpoint-copy needed — pretrain_s is resolved by
+# OmniLearned itself.
 #
 # Optional env:
 #   DATASET_SIZE   default 10000
 #   EPOCH_NUM      default 50
-#   MODEL_SUFFIX   default "_1x4"
+#   MODEL_SUFFIX   default "" (none)
 #   MODEL_SIZE     small (default) | medium | large; non-small needs an explicit
-#                  MODEL_SUFFIX, e.g. "_m_1x4_ep100"
+#                  MODEL_SUFFIX, e.g. "_m"
 #   SBATCH_QOS / SBATCH_TIME / SBATCH_ARRAY
 #
 # Data: uses the shared dataset-level data dir (<target_columns>_<size>/data/),
-# referenced via --path ../../data — no per-model data/ or symlink needed.
+# referenced via --path ../../data.
 
 set -euo pipefail
 
 dataset_size=${DATASET_SIZE:-10000}
 epoch_num=${EPOCH_NUM:-50}
-model_suffix=${MODEL_SUFFIX:-_1x4}
+model_suffix=${MODEL_SUFFIX:-}
 model_size=${MODEL_SIZE:-small}
 
 case "${model_size}" in
@@ -29,7 +34,7 @@ case "${model_size}" in
 esac
 # Keep non-small runs out of the small models' folders.
 if [[ "${model_size}" != "small" && -z "${MODEL_SUFFIX:-}" ]]; then
-    echo "Error: MODEL_SIZE=${model_size} needs an explicit MODEL_SUFFIX (e.g. _m_1x4_ep100)" >&2
+    echo "Error: MODEL_SIZE=${model_size} needs an explicit MODEL_SUFFIX (e.g. _m)" >&2
     exit 1
 fi
 export MODEL_SIZE="${model_size}"
@@ -49,8 +54,8 @@ if [[ "${model_size}" == "small" ]] && [[ "${dataset_size}" == "100" || "${datas
 fi
 
 target_column="3d_x_y_z"
-model="omnilearned_scratch${model_suffix}"
-job_name="o_sc${model_suffix}"
+model="omnilearned_jet_finetune${model_suffix}"
+job_name="o_ft${model_suffix}"
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo_dir="$(cd "${script_dir}/../.." && pwd)"
@@ -75,18 +80,19 @@ sbatch_args=()
 cat <<EOF
 [Submitting]
   job_name         : ${job_name}
+  pretrain_tag     : pretrain_${model_size:0:1} (OmniLearned-provided; local copy in omnicosmos_checkpoints/ if present, else auto-fetched)
   model_size       : ${model_size}
   run_dir          : ${run_dir}
   qos / time       : ${SBATCH_QOS:-script-default} / ${SBATCH_TIME:-script-default}
   array            : ${SBATCH_ARRAY:-script-default (0-2)}
 
-  Runner hparams stay at OmniLearned CLI defaults (lr, wd).
+  Runner hparams stay at OmniLearned CLI defaults (lr, wd, lr-factor).
   Only epoch_num is passed (${epoch_num}).
 EOF
 
 (
     cd "${run_dir}"
     sbatch "${sbatch_args[@]}" --job-name="${job_name}" \
-        "${script_dir}/run_omnilearned_scratch_1x4.sh" \
+        "${script_dir}/run_omnilearned_jet_finetune.sh" \
         "3" "${epoch_num}"
 )

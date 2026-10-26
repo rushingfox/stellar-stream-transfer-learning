@@ -16,7 +16,7 @@ pairs are already saved in each run's outputs__streams_*.npz.
 Usage:
     module load conda && conda activate stream_transfer_learning
     python src/bootstrap_uncertainty.py
-    python src/bootstrap_uncertainty.py --target_model omnilearned_proxy_cube_finetune_1x4 --dataset_size 1000
+    python src/bootstrap_uncertainty.py --target_model omnilearned_proxy_cube_finetune --dataset_size 1000
 """
 import argparse
 import glob
@@ -67,7 +67,7 @@ def parse_args():
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--target_columns", default="3d_x_y_z")
     p.add_argument("--dataset_size", type=int, default=100)
-    p.add_argument("--target_model", default="omnilearned_proxy_gaussian_ellipsoid_sigmax_finetune_1x4",
+    p.add_argument("--target_model", default="omnilearned_proxy_gaussian_ellipsoid_sigmax_finetune",
                     help="Model folder name (default: the best N=100 performer).")
     p.add_argument("--run_indices", type=int, nargs="+", default=[0, 1, 2])
     p.add_argument("--n_boot", type=int, default=1000)

@@ -80,7 +80,7 @@ for dataset_size in "${dataset_sizes[@]}"; do
             --output_root "${repo_dir}" \
             --dataset_size "${dataset_size}" \
             --target_model "omnilearned" \
-            --output_model "omnilearned_proxy_pretrain_1x4" \
+            --output_model "omnilearned_proxy_pretrain" \
             --target_columns "${target_column}"
     done
 done

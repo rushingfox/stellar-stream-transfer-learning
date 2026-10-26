@@ -15,10 +15,10 @@ def parse_args():
     parser.add_argument('--input_raw', type=str, required=True)
     parser.add_argument('--output_root', type=str, default="..", help="Repository root for output datasets")
     parser.add_argument('--dataset_size', type=int, choices=VALID_DATASET_SIZES, required=True)
-    parser.add_argument('--target_model', type=str, choices=['baseline', 'baseline_256', 'omnilearned'], required=True)
+    parser.add_argument('--target_model', type=str, choices=['deepsets', 'omnilearned'], required=True)
     parser.add_argument('--output_model', type=str, default="", help="Optional model folder name override for saving outputs")
     parser.add_argument('--task', type=str, choices=list(TASKS), default=DEFAULT_TASK,
-                        help="Regression task: sets the output folder prefix and the baseline label key")
+                        help="Regression task: sets the output folder prefix and the DeepSets label key")
     parser.add_argument('--target_columns', type=str, choices=['3d_x_y_z', '3d_ra_dec_parallax', '4d_x_y_z_vtotal', '4d_ra_dec_parallax_vtotal', '6d_x_y_z_vx_vy_vz', '6d_ra_dec_parallax_proper_motions', '3d_proxy_ellipsoid', '3d_proxy_cube', '3d_proxy_bounded_ball', '3d_proxy_gaussian_ball', '3d_proxy_hard_ellipsoid', '3d_proxy_box', '3d_x_y_z_eigenvalues'], required=True)
 
     args = parser.parse_args()
@@ -53,10 +53,10 @@ def validate_input_raw_size(input_raw, dataset_size):
             f"but found {actual_size} samples in {input_raw}."
         )
 
-def process_baseline(input_raw, output_dir, target_columns, label_key):
+def process_deepsets(input_raw, output_dir, target_columns, label_key):
     p = Path(output_dir)
     p.mkdir(parents=True, exist_ok=True)
-    output_file = p / "baseline_dataset.h5"
+    output_file = p / "deepsets_dataset.h5"
     with h5py.File(input_raw, 'r') as f:
         cart_ds = f['Cartesian_data']
         icrs_ds = f['ICRS_data']
@@ -514,8 +514,8 @@ if __name__ == "__main__":
     output_dir.mkdir(parents=True, exist_ok=True)
     print(f"[*] Output directory: {output_dir}")
 
-    if args.target_model == 'baseline' or args.target_model == 'baseline_256':
-        process_baseline(args.input_raw, output_dir, args.target_columns, TASKS[args.task]["label_key"])
+    if args.target_model == 'deepsets':
+        process_deepsets(args.input_raw, output_dir, args.target_columns, TASKS[args.task]["label_key"])
     elif "omni" in args.target_model:
         process_omnilearned(args.input_raw, output_dir, args.target_columns)
         

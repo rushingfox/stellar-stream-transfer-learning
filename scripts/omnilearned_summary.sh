@@ -8,27 +8,29 @@ else
     dataset_sizes=("${dataset_sizes_default[@]}")
 fi
 proxy_pretrain_size=${PROXY_PRETRAIN_SIZE:-10000}
+# Run from scripts/. TASK picks the finetune folders (prog_mass_ or subhalo_<target_columns>_<size>/).
+source ./task_config.sh
 
 # Finetune
 target_columns_default=(
     "3d_x_y_z"
 )
 target_models_default=(
-    "omnilearned_scratch_1x4"
-    "omnilearned_finetune_1x4"
-    "omnicosmos_camels_finetune_1x4"
-    "omnicosmos_quijote_finetune_1x4"
-    "omnilearned_proxy_cube_finetune_1x4"
-    "omnilearned_proxy_bounded_ball_finetune_1x4"
-    "omnilearned_proxy_gaussian_ball_finetune_1x4"
-    "omnilearned_proxy_gaussian_ellipsoid_sigmax_finetune_1x4"
-    "omnilearned_proxy_bounded_ellipsoid_a_finetune_1x4"
-    "omnilearned_proxy_box_a_finetune_1x4"
-    "omnilearned_proxy_eigen_lambda1_finetune_1x4"
+    "omnilearned_scratch"
+    "omnilearned_jet_finetune"
+    "omnicosmos_camels_finetune"
+    "omnicosmos_quijote_finetune"
+    "omnilearned_proxy_cube_finetune"
+    "omnilearned_proxy_bounded_ball_finetune"
+    "omnilearned_proxy_gaussian_ball_finetune"
+    "omnilearned_proxy_gaussian_ellipsoid_sigmax_finetune"
+    "omnilearned_proxy_bounded_ellipsoid_a_finetune"
+    "omnilearned_proxy_box_a_finetune"
+    "omnilearned_proxy_eigen_lambda1_finetune"
 )
 
 # Proxy pretrain (regression) — the seven unified 1-target proxies (six
-# geometric + stream eigenvalues), all on the 1x4 architecture.
+# geometric + stream eigenvalues).
 proxy_pretrain_columns_default=(
     "3d_proxy_cube"
     "3d_proxy_bounded_ball"
@@ -39,7 +41,7 @@ proxy_pretrain_columns_default=(
     "3d_x_y_z_eigenvalues_lambda1"
 )
 proxy_pretrain_models_default=(
-    "omnilearned_proxy_pretrain_1x4"
+    "omnilearned_proxy_pretrain"
 )
 
 run_indices_default=(0 1 2)
@@ -93,7 +95,7 @@ for dataset_size in "${dataset_sizes[@]}"; do
     for col in "${target_columns[@]}"; do
         for model in "${target_models[@]}"; do
             for idx in "${run_indices[@]}"; do
-                run_summary "../${col}_${dataset_size}/${model}/run_${idx}"
+                run_summary "../${task_dir_prefix}${col}_${dataset_size}/${model}/run_${idx}"
             done
         done
     done

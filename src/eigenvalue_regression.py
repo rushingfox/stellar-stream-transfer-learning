@@ -10,11 +10,13 @@ stream's spatial covariance matrix. Two feature variants:
 Output:
   {output_dir}/results/loss_history.csv   (same format as run_average.py)
   {output_dir}/results/fit_summary.txt    (variant, formula, all MSEs)
+  with --eval_input_raw: the same two files plus predictions.npz in
+  {output_dir}/shared_test<eval_dataset_size>/ instead of results/
 
 Usage:
     python src/eigenvalue_regression.py \\
         --input_raw raw_data/prog_mass_reg_dataset_10000.h5 \\
-        --output_dir 3d_x_y_z_10000/eigenvalue_regression/run_0
+        --output_dir prog_mass_3d_x_y_z_10000/eigenvalue_regression/run_0
 
     # force a specific variant:
     python src/eigenvalue_regression.py ... --variant power_law
@@ -23,7 +25,7 @@ Usage:
     for size in 100 1000 10000; do
         python src/eigenvalue_regression.py \\
             --input_raw raw_data/prog_mass_reg_dataset_${size}.h5 \\
-            --output_dir 3d_x_y_z_${size}/eigenvalue_regression/run_0
+            --output_dir prog_mass_3d_x_y_z_${size}/eigenvalue_regression/run_0
     done
 """
 
@@ -127,7 +129,7 @@ def parse_args():
                     help="If set, score the already-selected (best-val) variant against "
                          "this file's test split instead of --input_raw's own. Requires "
                          "--eval_dataset_size. Writes to "
-                         "results/shared_test<eval_dataset_size>/loss_history.csv.")
+                         "shared_test<eval_dataset_size>/loss_history.csv.")
     ap.add_argument("--eval_dataset_size", type=int, default=None,
                     help="Dataset size label for --eval_input_raw's output subdir naming.")
     return ap.parse_args()
@@ -197,7 +199,7 @@ def main():
     # shared/fixed test set instead of --input_raw's own. Model selection above
     # (which variant, its coefficients) is unaffected -- only the reported test
     # metric changes. ---
-    csv_name = "loss_history.csv"
+    out_dir = Path(args.output_dir) / "results"
     if args.eval_input_raw:
         if args.eval_dataset_size is None:
             sys.exit("Error: --eval_dataset_size is required with --eval_input_raw")
@@ -215,7 +217,7 @@ def main():
         eval_pred = pipe.predict(eval_X)
         test_mse = float(np.mean((eval_pred - eval_y) ** 2))
         avg_test_mse = float(np.mean((eval_y - mean_train) ** 2))
-        csv_name = f"shared_test{args.eval_dataset_size}/loss_history.csv"
+        out_dir = Path(args.output_dir) / f"shared_test{args.eval_dataset_size}"
 
     improvement = (avg_test_mse - test_mse) / avg_test_mse * 100
 
@@ -224,21 +226,19 @@ def main():
     print(f"    vs average baseline: {avg_test_mse:.6f}  (improvement: {improvement:.1f}%)")
 
     # --- Save results ---
-    out_dir = Path(args.output_dir) / "results"
-    (out_dir / csv_name).parent.mkdir(parents=True, exist_ok=True)
+    out_dir.mkdir(parents=True, exist_ok=True)
 
     pd.DataFrame({
         "Epoch":      [1],
         "Train_Loss": [train_mse],
         "Val_Loss":   [val_mse],
         "Test_Loss":  [test_mse],
-    }).to_csv(out_dir / csv_name, index=False)
+    }).to_csv(out_dir / "loss_history.csv", index=False)
 
     if args.eval_input_raw:
         # Per-sample predictions (same keys as OmniLearned's outputs__streams_*.npz)
         # for matched/paired per-stream comparisons downstream.
-        np.savez(out_dir / csv_name.replace("loss_history.csv", "predictions.npz"),
-                 prediction=eval_pred, pid=eval_y)
+        np.savez(out_dir / "predictions.npz", prediction=eval_pred, pid=eval_y)
 
     formula = _formula_str(best_variant, coef, intercept, args.degree)
     coef_str = "  ".join(f"λ{i+1}={c:.4f}" for i, c in enumerate(coef))
@@ -253,11 +253,10 @@ def main():
         f"avg_baseline_test_mse: {avg_test_mse:.6f}\n"
         f"improvement_vs_avg: {improvement:.1f}%\n"
     )
-    summary_name = str(Path(csv_name).with_name("fit_summary.txt"))
-    (out_dir / summary_name).write_text(summary)
+    (out_dir / "fit_summary.txt").write_text(summary)
 
-    print(f"\nSaved {out_dir / csv_name}")
-    print(f"Saved {out_dir / summary_name}")
+    print(f"\nSaved {out_dir / 'loss_history.csv'}")
+    print(f"Saved {out_dir / 'fit_summary.txt'}")
 
 
 if __name__ == "__main__":

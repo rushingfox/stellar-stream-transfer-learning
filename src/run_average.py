@@ -3,7 +3,7 @@ import h5py
 import numpy as np
 import pandas as pd
 from pathlib import Path
-from exp_paths import DEFAULT_TASK, TASKS, VALID_DATASET_SIZES, find_label_key, get_dataset_dir, get_results_dir
+from exp_paths import DEFAULT_TASK, TASKS, VALID_DATASET_SIZES, find_label_key, get_dataset_dir, get_results_dir, get_shared_test_dir
 
 
 def parse_args():
@@ -44,7 +44,8 @@ def parse_args():
         default=None,
         help="If set, score mean_train against this dataset_size's test split "
              "instead of --dataset_size's own (train split unaffected). Writes "
-             "to results/shared_test<N>/loss_history.csv instead of loss_history.csv.",
+             "run_<idx>/shared_test<N>/loss_history.csv (+ predictions.npz) instead "
+             "of run_<idx>/results/loss_history.csv.",
     )
     return parser.parse_args()
 
@@ -54,10 +55,10 @@ def main():
     repo_dir = Path(__file__).resolve().parent.parent
 
     # The shared DeepSets dataset for this size (only its labels are used).
-    h5_path = get_dataset_dir(repo_dir, args.target_columns, args.dataset_size, args.task) / "data" / "baseline_dataset.h5"
+    h5_path = get_dataset_dir(repo_dir, args.target_columns, args.dataset_size, args.task) / "data" / "deepsets_dataset.h5"
     
     if not h5_path.exists():
-        print(f"Error: H5 file not found at {h5_path}. Please generate 3D baseline data first.")
+        print(f"Error: H5 file not found at {h5_path}. Please run scripts/prepare_data_deepsets.sh first.")
         return
 
     with h5py.File(h5_path, 'r') as f:
@@ -78,15 +79,13 @@ def main():
 
     if args.eval_dataset_size is None:
         test_loss = np.mean((y_test - mean_train) ** 2)
-        csv_name = "loss_history.csv"
     else:
-        eval_h5_path = get_dataset_dir(repo_dir, args.target_columns, args.eval_dataset_size, args.task) / "data" / "baseline_dataset.h5"
+        eval_h5_path = get_dataset_dir(repo_dir, args.target_columns, args.eval_dataset_size, args.task) / "data" / "deepsets_dataset.h5"
         with h5py.File(eval_h5_path, 'r') as f:
             y_eval = f[find_label_key(f)][:]
         eval_val_split = int(y_eval.shape[0] * 0.8)
         y_shared_test = y_eval[eval_val_split:]
         test_loss = np.mean((y_shared_test - mean_train) ** 2)
-        csv_name = f"shared_test{args.eval_dataset_size}/loss_history.csv"
         # Per-sample predictions (same keys as OmniLearned's outputs__streams_*.npz)
         # for matched/paired per-stream comparisons downstream. Prediction is the
         # same mean_train scalar repeated for every stream.
@@ -94,15 +93,12 @@ def main():
 
     # Use a dedicated "average" model directory under the dataset key.
     for idx in args.indices:
-        res_dir = get_results_dir(
-            repo_dir,
-            args.target_columns,
-            args.dataset_size,
-            "average",
-            idx,
-            task=args.task,
-        )
-        out_path = res_dir / csv_name
+        if args.eval_dataset_size is None:
+            out_dir = get_results_dir(repo_dir, args.target_columns, args.dataset_size, "average", idx, task=args.task)
+        else:
+            out_dir = get_shared_test_dir(repo_dir, args.target_columns, args.dataset_size, "average", idx,
+                                          eval_dataset_size=args.eval_dataset_size, task=args.task)
+        out_path = out_dir / "loss_history.csv"
         out_path.parent.mkdir(parents=True, exist_ok=True)
 
         df = pd.DataFrame({

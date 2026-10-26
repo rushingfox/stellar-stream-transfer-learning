@@ -14,14 +14,15 @@ mamba activate stream_transfer_learning
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(cd "${script_dir}/.." && pwd)"
-# TASK=subhalo evaluates the subhalo_<target_columns>_<size>/ runs on that task's shared test set.
+# TASK picks the runs (prog_mass_ or subhalo_<target_columns>_<size>/) and that task's shared test set.
 source "${script_dir}/task_config.sh"
 
 target_columns="3d_x_y_z"
 eval_dataset_size=${EVAL_DATASET_SIZE:-10000}
-# Nested subdir, not a flat sibling filename: omnilearned_summary.py writes
-# plots alongside --output_csv, which would clobber the run's own plots.
-output_csv_name="shared_test${eval_dataset_size}/loss_history.csv"
+# Everything from this evaluation goes to run_<idx>/shared_test<N>/: the
+# predictions, loss_history.csv (plus the plots omnilearned_summary.py writes
+# next to it) and, later, compute_bootstrap_shared_test.py's bootstrap.csv.
+shared_dirname="shared_test${eval_dataset_size}"
 shared_data_dir="${repo_root}/${task_dir_prefix}${target_columns}_${eval_dataset_size}/data"
 
 if [[ -n "${DATASET_SIZES:-}" ]]; then
@@ -37,36 +38,36 @@ else
 fi
 
 omnilearned_models_default=(
-    "omnilearned_scratch_1x4"
-    "omnilearned_finetune_1x4"
-    "omnicosmos_camels_finetune_1x4"
-    "omnicosmos_quijote_finetune_1x4"
-    "omnilearned_proxy_cube_finetune_1x4"
-    "omnilearned_proxy_bounded_ball_finetune_1x4"
-    "omnilearned_proxy_gaussian_ball_finetune_1x4"
-    "omnilearned_proxy_gaussian_ellipsoid_sigmax_finetune_1x4"
-    "omnilearned_proxy_bounded_ellipsoid_a_finetune_1x4"
-    "omnilearned_proxy_box_a_finetune_1x4"
-    "omnilearned_proxy_eigen_lambda1_finetune_1x4"
+    "omnilearned_scratch"
+    "omnilearned_jet_finetune"
+    "omnicosmos_camels_finetune"
+    "omnicosmos_quijote_finetune"
+    "omnilearned_proxy_cube_finetune"
+    "omnilearned_proxy_bounded_ball_finetune"
+    "omnilearned_proxy_gaussian_ball_finetune"
+    "omnilearned_proxy_gaussian_ellipsoid_sigmax_finetune"
+    "omnilearned_proxy_bounded_ellipsoid_a_finetune"
+    "omnilearned_proxy_box_a_finetune"
+    "omnilearned_proxy_eigen_lambda1_finetune"
 )
-baseline_models_default=(
-    "baseline_256"
+deepsets_models_default=(
+    "deepsets"
 )
 
 if [[ -n "${TARGET_MODELS:-}" ]]; then
     read -r -a all_models <<< "${TARGET_MODELS}"
     omnilearned_models=()
-    baseline_models=()
+    deepsets_models=()
     for m in "${all_models[@]}"; do
-        if [[ "$m" == baseline* ]]; then
-            baseline_models+=("$m")
+        if [[ "$m" == deepsets* ]]; then
+            deepsets_models+=("$m")
         else
             omnilearned_models+=("$m")
         fi
     done
 else
     omnilearned_models=("${omnilearned_models_default[@]}")
-    baseline_models=("${baseline_models_default[@]}")
+    deepsets_models=("${deepsets_models_default[@]}")
 fi
 
 # Single process (no torchrun/srun) -- a one-off forward pass isn't worth
@@ -89,7 +90,7 @@ except (OSError, KeyError, ValueError):
 
 eval_omnilearned() {
     local run_dir="$1"
-    local out_csv="${run_dir}/results/${output_csv_name}"
+    local out_csv="${run_dir}/${shared_dirname}/loss_history.csv"
 
     if [[ ! -f "${run_dir}/best_model_.pt" ]]; then
         echo "[skip] no checkpoint: ${run_dir}/best_model_.pt"
@@ -103,13 +104,13 @@ eval_omnilearned() {
     local model_size
     model_size="$(model_size_of "${run_dir}")"
     echo "[eval] ${run_dir}  ->  ${task_dir_prefix}${target_columns}_${eval_dataset_size} test split (size ${model_size})"
-    rm -rf "${run_dir}/shared_test${eval_dataset_size}"
-    mkdir -p "${run_dir}/shared_test${eval_dataset_size}"
+    rm -rf "${run_dir:?}/${shared_dirname}"
+    mkdir -p "${run_dir}/${shared_dirname}"
     (
         cd "${run_dir}"
         omnilearned evaluate \
             -i ./ \
-            -o "./shared_test${eval_dataset_size}/" \
+            -o "./${shared_dirname}/" \
             --save-tag "" \
             --dataset streams \
             --path "${shared_data_dir}" \
@@ -125,16 +126,16 @@ eval_omnilearned() {
     # omnilearned_summary.py creates os.path.dirname(--output_csv) itself.
     python "${repo_root}/src/omnilearned_summary.py" \
         --json_path "${run_dir}/training_.json" \
-        --npz_glob "${run_dir}/shared_test${eval_dataset_size}/outputs__streams_*.npz" \
+        --npz_glob "${run_dir}/${shared_dirname}/outputs__streams_*.npz" \
         --output_csv "${out_csv}"
 }
 
-eval_baseline() {
+eval_deepsets() {
     local dataset_size="$1"
     local model="$2"
     local idx="$3"
     local run_dir="${repo_root}/${task_dir_prefix}${target_columns}_${dataset_size}/${model}/run_${idx}"
-    local out_csv="${run_dir}/results/${output_csv_name}"
+    local out_csv="${run_dir}/${shared_dirname}/loss_history.csv"
 
     if [[ -f "${out_csv}" && -z "${FORCE:-}" ]]; then
         echo "[done] ${out_csv} already exists"
@@ -142,15 +143,14 @@ eval_baseline() {
     fi
 
     echo "[eval] ${run_dir}  ->  ${task_dir_prefix}${target_columns}_${eval_dataset_size} test split"
-    python "${repo_root}/src/eval_baseline_shared_test.py" \
+    python "${repo_root}/src/eval_deepsets_shared_test.py" \
         --repo_root "${repo_root}" \
         --target_columns "${target_columns}" \
         --task "${task}" \
         --dataset_size "${dataset_size}" \
         --target_model "${model}" \
         --run_idx "${idx}" \
-        --eval_dataset_size "${eval_dataset_size}" \
-        --output_csv_name "${output_csv_name}"
+        --eval_dataset_size "${eval_dataset_size}"
 }
 
 for dataset_size in "${dataset_sizes[@]}"; do
@@ -159,9 +159,9 @@ for dataset_size in "${dataset_sizes[@]}"; do
             eval_omnilearned "${repo_root}/${task_dir_prefix}${target_columns}_${dataset_size}/${model}/run_${idx}"
         done
     done
-    for model in "${baseline_models[@]}"; do
+    for model in "${deepsets_models[@]}"; do
         for idx in "${run_idxs[@]}"; do
-            eval_baseline "${dataset_size}" "${model}" "${idx}"
+            eval_deepsets "${dataset_size}" "${model}" "${idx}"
         done
     done
 done

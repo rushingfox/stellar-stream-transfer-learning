@@ -1,22 +1,22 @@
 #!/bin/bash
-# Hybrid runner for 1 node x 4 GPU proxy finetune on stream data.
-# Works in TWO modes:
-#   1) sbatch mode: submitted via _1x4_submission.sh; SBATCH headers are used.
+# Hybrid runner for 1 node x 4 GPU FROM-SCRATCH training on stream data.
+# Same dual-mode design as run_omnilearned_proxy_finetune.sh:
+#   1) sbatch mode: submitted via a wrapper; SBATCH headers used.
 #   2) bash mode:   run directly inside a JupyterHub Exclusive GPU session with
-#                   `bash run_omnilearned_proxy_finetune_1x4.sh <num_feat> <load_tag> <epoch_num>`
-#                   from the finetune dir's run_N subdirectory.
+#                   `bash run_omnilearned_scratch.sh <num_feat> <epoch_num>`
+#                   from the scratch dir's run_N subdirectory.
 #
-# Launcher: torchrun (portable across both modes; doesn't need srun).
-# All hparams stay at OmniLearned CLI defaults (--lr, --wd, --lr-factor, --batch)
-# to match the existing single-GPU proxy finetune convention.
+# Launcher: torchrun. All hparams stay at OmniLearned CLI defaults (matching
+# the existing single-GPU scratch convention).
 #
 # Data: uses the shared dataset-level data dir (<target_columns>_<size>/data/),
-# referenced via --path ../../data (no per-model data/ dir/symlink).
+# referenced via --path ../../data (no per-model data/ dir).
 #
 # Positional args:
 #   $1 : num_feat     (e.g. 3 for 3d_x_y_z)
-#   $2 : load_tag     (e.g. "ellipsoid_sigmax"; determines best_model_${tag}.pt)
-#   $3 : epoch_num    (e.g. 50)
+#   $2 : epoch_num    (e.g. 50)
+#
+# Env: MODEL_SIZE = small | medium | large (small by default), plus LR / WD / BATCH.
 
 #SBATCH -A m4474
 #SBATCH --constraint=gpu
@@ -34,7 +34,6 @@
 
 set -euo pipefail
 
-# Capture full invocation for reproducibility (before positional args are consumed).
 _INVOCATION_LINE="$(printf '%q ' "$0" "$@")"
 
 # REPO_ROOT: prefer BASH_SOURCE derivation (works in both sbatch and bash
@@ -51,13 +50,9 @@ else
     exit 1
 fi
 
-# module load / mamba activate: idempotent, safe to re-run in JupyterHub.
 module load conda
 mamba activate stream_transfer_learning
 
-# Resolve run subdirectory:
-#   sbatch mode: cwd = finetune dir (submission wrapper cd'd there); use array_task_id.
-#   bash mode:   user is already inside run_N/, cwd is that subdir.
 if [[ -n "${SLURM_ARRAY_TASK_ID:-}" ]]; then
     mkdir -p logs
     BASE_IDX=0
@@ -67,52 +62,26 @@ if [[ -n "${SLURM_ARRAY_TASK_ID:-}" ]]; then
 fi
 
 NUM_FEAT=${1:?Error: need num_feat}
-LOAD_TAG=${2:?Error: need load_tag}
-TOTAL_EPOCHS=${3:?Error: need epoch_num}
+TOTAL_EPOCHS=${2:?Error: need epoch_num}
 
-# Copy pretrain checkpoint from finetune dir (one level up) into run subdir.
-CKPT_SRC="../best_model_${LOAD_TAG}.pt"
-if [[ ! -f "./best_model_${LOAD_TAG}.pt" ]]; then
-    if [[ ! -f "${CKPT_SRC}" ]]; then
-        echo "Error: pretrain checkpoint not found at ${CKPT_SRC}" >&2
-        exit 1
-    fi
-    cp "${CKPT_SRC}" ./
-fi
-
-# MASTER_PORT: derive from SLURM_JOB_ID (both sbatch and JupyterHub set this).
-# Kept in 15000-30000 range to avoid Linux ephemeral port collisions (32768+).
 export MASTER_PORT=$(( 15000 + (${SLURM_JOB_ID:-$$} % 15000) ))
 export MASTER_ADDR=localhost
 
-# Runtime hparams (env-overridable; each defaults to OmniLearned CLI default).
-# Capture the "raw" pre-default state so invocation.txt can distinguish
-# "user set X=Y" from "user didn't set X, default was used".
-# `${VAR-UNSET}` returns "UNSET" only if VAR is truly unset; empty string
-# ("VAR=") is treated as user-set.
+# lr_factor is finetune-only (multiplies new-layer LR when --fine-tune is set);
+# for scratch it has no effect so we omit it from both explicit hparams and
+# invocation.txt to avoid noise.
 _RAW_LR=${LR-UNSET}
 _RAW_WD=${WD-UNSET}
-_RAW_LR_FACTOR=${LR_FACTOR-UNSET}
 _RAW_BATCH=${BATCH-UNSET}
+_RAW_MODEL_SIZE=${MODEL_SIZE-UNSET}
 
 LR=${LR:-5e-5}
 WD=${WD:-0.0}
-LR_FACTOR=${LR_FACTOR:-1.0}
 BATCH=${BATCH:-4}
-SIZE=small
+SIZE=${MODEL_SIZE:-small}
 MODE=regression
 NUM_CLASSES=1
 
-# --- Reproducibility artifacts (both bash and sbatch modes) ---
-
-# 1) invocation.txt: the exact command line the user typed (or that sbatch fired),
-#    plus env var state, so the run is fully reproducible. Written before training
-#    so it's there even if training crashes early.
-#
-# NOTE: bash's `$0 $@` captures positional args only. Env-var prefixes
-# (e.g. `LR=1e-5 bash runner.sh ...`) do NOT appear in `$@`. To avoid
-# misleading readers, the file below records BOTH the raw pre-default env
-# state (whether the user overrode each var) AND the effective values used.
 cat > invocation.txt <<EOF
 # Recorded: $(date -Iseconds)
 # Host:     $(hostname)
@@ -121,10 +90,10 @@ cat > invocation.txt <<EOF
 # SLURM_JOB_ID: ${SLURM_JOB_ID:-(none, bash mode)}
 #
 # --- User-set env vars at invocation (UNSET = user did not set; runner default applied) ---
-#   LR        = ${_RAW_LR}
-#   WD        = ${_RAW_WD}
-#   LR_FACTOR = ${_RAW_LR_FACTOR}
-#   BATCH     = ${_RAW_BATCH}
+#   LR    = ${_RAW_LR}
+#   WD    = ${_RAW_WD}
+#   BATCH = ${_RAW_BATCH}
+#   MODEL_SIZE = ${_RAW_MODEL_SIZE}
 #
 # --- Command as invoked (verbatim; bash cannot capture env-var prefixes like LR=...) ---
 ${_INVOCATION_LINE}
@@ -132,10 +101,9 @@ ${_INVOCATION_LINE}
 # --- Fully reproducible command (defaults inlined; use this to re-run even if
 #     the runner's built-in defaults change later; identical to what the training
 #     actually saw) ---
-LR=${LR} WD=${WD} LR_FACTOR=${LR_FACTOR} BATCH=${BATCH} ${_INVOCATION_LINE}
+LR=${LR} WD=${WD} BATCH=${BATCH} MODEL_SIZE=${SIZE} ${_INVOCATION_LINE}
 EOF
 
-# 2) hparams.json: same live-introspection helper as the mn runner uses.
 python3 << PYEOF
 import sys
 sys.path.insert(0, "${REPO_ROOT}/src")
@@ -144,7 +112,6 @@ from write_hparams_json import write_hparams
 explicit = {
     "outdir":            "./",
     "save_tag":          "",
-    "pretrain_tag":      "${LOAD_TAG}",
     "dataset":           "streams",
     "path":              "../../data",
     "model_size":        "${SIZE}",
@@ -155,11 +122,10 @@ explicit = {
     "epoch":             int("${TOTAL_EPOCHS}"),
     "lr":                float("${LR}"),
     "wd":                float("${WD}"),
-    "lr_factor":         float("${LR_FACTOR}"),
     "batch":             int("${BATCH}"),
     "local_interaction": True,
     "interaction_type":  "astro",
-    "fine_tune":         True,
+    "fine_tune":         False,
 }
 slurm = {
     "run_idx":       "${CURRENT_IDX:-0}",
@@ -173,10 +139,11 @@ write_hparams("hparams.json", explicit=explicit, slurm=slurm)
 PYEOF
 
 echo "======================================="
-echo "[1x4 finetune] launcher = torchrun"
-echo "  load_tag / num_feat / epochs : ${LOAD_TAG} / ${NUM_FEAT} / ${TOTAL_EPOCHS}"
-echo "  lr / wd / lr_factor / batch  : ${LR} / ${WD} / ${LR_FACTOR} / ${BATCH}"
-echo "  MASTER_ADDR:MASTER_PORT      : ${MASTER_ADDR}:${MASTER_PORT}"
+echo "[1x4 scratch] launcher = torchrun"
+echo "  num_feat / epochs      : ${NUM_FEAT} / ${TOTAL_EPOCHS}"
+echo "  lr / wd / batch        : ${LR} / ${WD} / ${BATCH}"
+echo "  model size             : ${SIZE}"
+echo "  MASTER_ADDR:MASTER_PORT: ${MASTER_ADDR}:${MASTER_PORT}"
 echo "======================================="
 
 torchrun \
@@ -197,12 +164,9 @@ torchrun \
     --epoch "${TOTAL_EPOCHS}" \
     --lr "${LR}" \
     --wd "${WD}" \
-    --lr-factor "${LR_FACTOR}" \
     --batch "${BATCH}" \
     --local-interaction \
-    --interaction-type astro \
-    --fine-tune \
-    --pretrain-tag "${LOAD_TAG}"
+    --interaction-type astro
 
 if [ $? -ne 0 ]; then
     echo "Error: Training failed." >&2
@@ -210,7 +174,7 @@ if [ $? -ne 0 ]; then
 fi
 
 echo "---------------------------------------"
-echo "[1x4 finetune] Evaluation"
+echo "[1x4 scratch] Evaluation"
 torchrun \
     --nproc_per_node=4 \
     --nnodes=1 \
@@ -232,7 +196,7 @@ torchrun \
     --interaction-type astro
 
 echo "---------------------------------------"
-echo "[1x4 finetune] Generating results summary"
+echo "[1x4 scratch] Generating results summary"
 mkdir -p results
 python3 "${REPO_ROOT}/src/omnilearned_summary.py" \
     --json_path "./training_.json" \

@@ -5,20 +5,24 @@ joberr.o*
 *.pt
 *.out
 *.err
+*.log
 *.h5
 *.hdf5
 # dirs
 scripts/logs/
 .ipynb_checkpoints/
 __pycache__/
+.vscode/
 # build artifact from `pip install -e .`
 *.egg-info/
 
-# experiment run folders (<target_columns>_<dataset_size>/, and
-# subhalo_<target_columns>_<dataset_size>/ for the subhalo task)
+# experiment run folders: <task>_<target_columns>_<dataset_size>/ for the
+# downstream tasks (prog_mass_, subhalo_), <target_columns>_<dataset_size>/
+# for the pretraining datasets (3d_proxy_*, 3d_x_y_z_eigenvalues_*)
 3d_*/
 4d_*/
 6d_*/
+prog_mass_*/
 subhalo_*/
 
 # ...except: track the small per-run result files (loss curves, shared-test
@@ -30,10 +34,12 @@ subhalo_*/
 !3d_*/
 !4d_*/
 !6d_*/
+!prog_mass_*/
 !subhalo_*/
 !3d_*/**/
 !4d_*/**/
 !6d_*/**/
+!prog_mass_*/**/
 !subhalo_*/**/
 !3d_*/**/*.csv
 !3d_*/**/*.npz
@@ -41,6 +47,8 @@ subhalo_*/
 !4d_*/**/*.npz
 !6d_*/**/*.csv
 !6d_*/**/*.npz
+!prog_mass_*/**/*.csv
+!prog_mass_*/**/*.npz
 !subhalo_*/**/*.csv
 !subhalo_*/**/*.npz
 # Un-ignoring the directories above makes every OTHER file inside them
@@ -63,6 +71,10 @@ subhalo_*/
 6d_*/**/*.json
 6d_*/**/*.txt
 6d_*/**/*.npy
+prog_mass_*/**/*.png
+prog_mass_*/**/*.json
+prog_mass_*/**/*.txt
+prog_mass_*/**/*.npy
 subhalo_*/**/*.png
 subhalo_*/**/*.json
 subhalo_*/**/*.txt
@@ -70,12 +82,18 @@ subhalo_*/**/*.npy
 
 # ...except: track the loss/R^2 curves from geometric proxy PRETRAINING
 # specifically (one run per proxy, not one per seed) -- these demonstrate
-# the pretraining itself converged well. Scoped to omnilearned_proxy_pretrain_1x4/
+# the pretraining itself converged well. Scoped to omnilearned_proxy_pretrain/
 # so it doesn't also pull in the same-named files from every finetune run
 # (13 models x 3 sizes x 3 seeds), which would be redundant with the
 # already-tracked loss_history.csv the main figure is built from.
-!3d_*/omnilearned_proxy_pretrain_1x4/**/loss_curve.png
-!3d_*/omnilearned_proxy_pretrain_1x4/**/r2_curve.png
+!3d_*/omnilearned_proxy_pretrain/**/loss_curve.png
+!3d_*/omnilearned_proxy_pretrain/**/r2_curve.png
+# Generator (diffusion) pretrains have no R^2 curve; their loss curve and the
+# figures from src/generator_pretrain_diagnostics.py show they trained instead.
+!3d_*/omnilearned_proxy_pretrain_generator/**/loss_curve.png
+!3d_*/omnilearned_proxy_pretrain_generator/**/generator_*.png
+# A generator pretrain reads its regression sibling's data through this symlink.
+3d_*/omnilearned_proxy_pretrain_generator/data
 
 # ...except: track hparams.json (written by the OmniLearned CLI itself --
 # the complete, authoritative record of every training hyperparameter, not
@@ -89,6 +107,7 @@ subhalo_*/**/*.npy
 !3d_*/**/hparams.json
 !4d_*/**/hparams.json
 !6d_*/**/hparams.json
+!prog_mass_*/**/hparams.json
 !subhalo_*/**/hparams.json
 
 # raw data folders

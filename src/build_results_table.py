@@ -10,7 +10,7 @@ import matplotlib.pyplot as plt
 from matplotlib.patches import Rectangle
 from matplotlib.ticker import PercentFormatter
 import seaborn as sns
-from exp_paths import dataset_key, get_loss_history_csv_path, validate_dataset_size
+from exp_paths import DEFAULT_TASK, TASKS, dataset_key, get_run_dir, validate_dataset_size
 
 sns.set_theme(style="whitegrid")
 
@@ -44,6 +44,12 @@ _PRETTY_MODEL_NAMES = {
     'proxy_bounded_ellipsoid_a':       'Bounded Ellipsoid',
     'proxy_box_a':           'Box',
     'proxy_stream_eigenvalues_lambda1': 'Real-Stream PCA',
+    # Optional models, not in the paper's default list.
+    'DeepSets_1024':         'DeepSets (1024)',
+    'OmniLearned_Scratch_M': 'OmniLearned-m (Scratch)',
+    'OmniLearned_Finetune_M': 'OmniLearned-m (HEP Jets)',
+    'proxy_stream_eigenvalues_lambda2': r'Real-Stream PCA ($\lambda_2$)',
+    'proxy_stream_eigenvalues_lambda3': r'Real-Stream PCA ($\lambda_3$)',
 }
 
 
@@ -86,7 +92,7 @@ def _pretty_count_label(n):
 
 
 def _pretty_dataset_label(ds_key):
-    """'3d_x_y_z_10000' -> '6,000'. Folder-name sizes are the total pool
+    """'prog_mass_3d_x_y_z_10000' -> '6,000'. Folder-name sizes are the total pool
     (train+val+test); display convention is the train-split count (60%)."""
     m = re.search(r'(\d+)$', ds_key)
     if not m:
@@ -96,7 +102,7 @@ def _pretty_dataset_label(ds_key):
 
 
 def _pretty_combined_label(model_str):
-    """'3d_x_y_z_10000+proxy_cube' -> 'N = 10,000 · Proxy: Cube'."""
+    """'prog_mass_3d_x_y_z_10000+proxy_cube' -> 'N = 10,000 · Proxy: Cube'."""
     if '+' not in model_str:
         return model_str
     ds_part, name_part = model_str.split('+', 1)
@@ -121,18 +127,35 @@ _CATEGORY_STYLE = {
     'eigen':     {'marker': 'D', 'colors': ['#c51b8a']},
 }
 
+# Optional models (not in the paper's default list) get a fixed color of their
+# own, a darker or lighter shade of their base model's, instead of a slot in
+# _CATEGORY_STYLE. The paper's models keep handing out the category swatches
+# among themselves only, so adding an optional model never recolors them, and
+# a figure without optional models is unchanged.
+_OPTIONAL_MODEL_COLORS = {
+    'deepsets_1024':                    '#7f3b08',  # DeepSets 256 '#a6763d'
+    'omnilearned_scratch_m':            '#2c4a5a',  # OmniLearned Scratch '#5b7c8d'
+    'omnilearned_finetune_m':           '#a63603',  # OmniLearned Finetune '#e6550d'
+    'proxy_stream_eigenvalues_lambda2': '#f768a1',  # Real-Stream PCA '#c51b8a'
+    'proxy_stream_eigenvalues_lambda3': '#7a0177',
+}
+
 # Baseline ordering (left-to-right / legend order within the category).
 _BASELINE_RANK = {
     'average': 0,
     'eigenvalue_regression': 1,
     'deepsets_256': 2,
     'baseline_256': 2,
+    'deepsets_1024': 2.5,          # optional, next to DeepSets 256
     'omnilearned_scratch': 3,
+    'omnilearned_scratch_m': 3.5,  # optional, next to OmniLearned Scratch
 }
 
 # Physics ordering: most-distant domain first.
 _PHYSICS_RANK = {
     'omnilearned_finetune': 0,   # HEP jets — most distant domain
+    'omnilearned_jet_finetune': 0,  # the same model by its folder name
+    'omnilearned_finetune_m': 0.5,  # optional, next to OmniLearned Finetune
     'omnicosmos_camels':    1,   # cosmological, smaller-scale (CAMELS)
     'omnicosmos_quijote':   2,   # cosmological, larger-scale (Quijote)
 }
@@ -151,7 +174,9 @@ _RANK_TABLES = {
     'baseline': _BASELINE_RANK,
     'physics': _PHYSICS_RANK,
     'synthetic': _SYNTHETIC_RANK,
-    'eigen': {'proxy_stream_eigenvalues_lambda1': 0},
+    'eigen': {'proxy_stream_eigenvalues_lambda1': 0,
+              'proxy_stream_eigenvalues_lambda2': 1,
+              'proxy_stream_eigenvalues_lambda3': 2},
 }
 
 
@@ -168,7 +193,7 @@ def categorize_model(name):
     n = name.lower()
     if 'stream_eigenvalues' in n or 'eigen_lambda1' in n:
         return 'eigen'
-    if 'omnilearned_finetune' in n or 'omnicosmos' in n:
+    if 'omnilearned_finetune' in n or 'jet_finetune' in n or 'omnicosmos' in n:
         return 'physics'
     if ('scratch' in n or 'deepsets' in n or 'average' in n
             or n in ('baseline', 'baseline_256', 'eigenvalue_regression')):
@@ -192,14 +217,26 @@ def build_model_styles(models):
         members = sorted(members, key=lambda m: _rank(m, _RANK_TABLES[cat]))
         style = _CATEGORY_STYLE[cat]
         colors = style['colors']
-        if len(members) > len(colors):
+        # Category swatches go to the non-optional members only, in rank order.
+        regular = [m for m in members if _optional_color(m) is None]
+        if len(regular) > len(colors):
             raise ValueError(
-                f"Category '{cat}' has {len(members)} members but "
+                f"Category '{cat}' has {len(regular)} members but "
                 f"only {len(colors)} colors defined in _CATEGORY_STYLE — add more."
             )
-        for member, color in zip(members, colors):
+        color_of = dict(zip(regular, colors))
+        for member in members:
+            color = color_of.get(member) or _optional_color(member)
             out.append((member, style['marker'], color))
     return out
+
+
+def _optional_color(name):
+    n = name.lower()
+    for key in sorted(_OPTIONAL_MODEL_COLORS, key=len, reverse=True):
+        if key in n:
+            return _OPTIONAL_MODEL_COLORS[key]
+    return None
 
 def parse_args():
     parser = argparse.ArgumentParser(description="Build results table and bar chart (best val MSE + test MSE at best val).")
@@ -288,11 +325,10 @@ def parse_args():
                              "draws two nested error bars per point -- inner: mean_stat only, "
                              "outer: total. Neither term is divided by sqrt(n_indices): both "
                              "describe single-realization noise, not the mean's standard error.")
-    parser.add_argument('--test_csv_name', type=str, default="loss_history.csv",
-                        help="Per-run CSV filename to read (under each run's results/ dir). "
-                             "Override to read an alternate evaluation pass, e.g. "
-                             "loss_history_shared_test10000.csv, without touching the "
-                             "original loss_history.csv other tools parse.")
+    parser.add_argument('--test_csv_name', type=str, default="results/loss_history.csv",
+                        help="Per-run CSV to read, relative to each run_<idx>/ dir. The "
+                             "default is the run's own split; the shared test set's are "
+                             "shared_test10000/loss_history.csv and shared_test10000/bootstrap.csv.")
     parser.add_argument(
         '--models',
         nargs='+',
@@ -309,6 +345,9 @@ def parse_args():
         default="..",
         help="Repository root used to resolve experiment folders."
     )
+    parser.add_argument('--task', type=str, default=DEFAULT_TASK, choices=sorted(TASKS),
+                        help="Downstream task of every --models entry: its folders are "
+                             "<task>_<target_columns>_<size>/ (default: prog_mass)")
     parser.add_argument('--epochs', type=int, default=50,
                         help="Only consider the first N epochs when selecting best loss")
     return parser.parse_args()
@@ -355,7 +394,7 @@ def load_one_run(csv_path, epochs, value_column="Test_Loss", error_column=None):
     return best_val, test_at_best, error_at_best
 
 
-def summarize_model(repo_root, target_columns, dataset_size, target_model, indices, epochs, sort_by="test", display_name=None, test_csv_name="loss_history.csv", value_column="Test_Loss", error_column=None, combine_errors=False):
+def summarize_model(repo_root, target_columns, dataset_size, target_model, indices, epochs, sort_by="test", display_name=None, test_csv_name="results/loss_history.csv", value_column="Test_Loss", error_column=None, combine_errors=False, task=DEFAULT_TASK):
     """Summarize statistics and return them for table and figure respectively.
 
     `target_model` is the on-disk folder name and is used to resolve paths.
@@ -364,19 +403,12 @@ def summarize_model(repo_root, target_columns, dataset_size, target_model, indic
     val_list = []
     test_list = []
     error_list = []
-    ds_key = dataset_key(target_columns, dataset_size)
+    ds_key = dataset_key(target_columns, dataset_size, task)
     if display_name is None:
         display_name = target_model
 
     for idx in indices:
-        path = get_loss_history_csv_path(
-            repo_root,
-            target_columns,
-            dataset_size,
-            target_model,
-            idx,
-            filename=test_csv_name,
-        )
+        path = get_run_dir(repo_root, target_columns, dataset_size, target_model, idx, task) / test_csv_name
 
         res = load_one_run(path, epochs, value_column=value_column, error_column=error_column)
         if res is None:
@@ -746,7 +778,7 @@ def generate_scatter_plot(df, save_plot_path, sort_metric, yscale="log", metric=
     plt.close()
 
 
-def generate_pretrain_size_scatter(df, save_plot_path, sort_metric, finetune_dataset_size=10000, yscale="log"):
+def generate_pretrain_size_scatter(df, save_plot_path, sort_metric, finetune_dataset_size=10000, yscale="log", task=DEFAULT_TASK):
     """Like generate_scatter_plot, but x-axis is pretrain dataset size
     instead of finetune size — asks "does pretrain data volume alone explain the ranking?"
 
@@ -764,7 +796,7 @@ def generate_pretrain_size_scatter(df, save_plot_path, sort_metric, finetune_dat
     else:
         y_col, error_col = "Mean Test MSE", "Std Test MSE"
 
-    ds_key = f"3d_x_y_z_{finetune_dataset_size}"
+    ds_key = dataset_key("3d_x_y_z", finetune_dataset_size, task)
     sub = df[(df['Dataset'] == ds_key) & (df['Model_Name'].isin(_PRETRAIN_SIZE))]
     if sub.empty:
         print(f"[pretrain-size scatter] no models with a known pretrain size "
@@ -941,7 +973,7 @@ def generate_latex_table(df, save_path=None, sort_metric="test", r2_reference_va
     return latex_str, display_df, best_mask
 
 
-def build_table(model_list, repo_root, epochs, indices, save_csv=None, save_plot=None, save_scatter=None, save_pretrain_scatter=None, save_latex=None, return_table_frames=False, sort_by="test", test_csv_name="loss_history.csv", yscale="log", metric="mse", r2_reference_var=None, r2_ymin=0.0, relative_to_scratch=False, relative_baseline_model="OmniLearned_Scratch", relative_ymin=-1.0, relative_ymax=1.0, scatter_ylabel=None, value_column="Test_Loss", scatter_ymin=None, scatter_ymax=None, error_column=None, connect_lines=False, combine_errors=False):
+def build_table(model_list, repo_root, epochs, indices, save_csv=None, save_plot=None, save_scatter=None, save_pretrain_scatter=None, save_latex=None, return_table_frames=False, sort_by="test", test_csv_name="results/loss_history.csv", yscale="log", metric="mse", r2_reference_var=None, r2_ymin=0.0, relative_to_scratch=False, relative_baseline_model="OmniLearned_Scratch", relative_ymin=-1.0, relative_ymax=1.0, scatter_ylabel=None, value_column="Test_Loss", scatter_ymin=None, scatter_ymax=None, error_column=None, connect_lines=False, combine_errors=False, task=DEFAULT_TASK):
     display_rows = []
     plot_rows = []
 
@@ -959,6 +991,7 @@ def build_table(model_list, repo_root, epochs, indices, save_csv=None, save_plot
             value_column=value_column,
             error_column=error_column,
             combine_errors=combine_errors,
+            task=task,
         )
         if result_display:
             display_rows.append(result_display)
@@ -1005,7 +1038,7 @@ def build_table(model_list, repo_root, epochs, indices, save_csv=None, save_plot
     # Figure 3: pretrain-dataset-size diagnostic scatter
     if save_pretrain_scatter and plot_rows:
         plot_df_pretrain = pd.DataFrame(plot_rows)
-        generate_pretrain_size_scatter(plot_df_pretrain, save_pretrain_scatter, sort_by, yscale=yscale)
+        generate_pretrain_size_scatter(plot_df_pretrain, save_pretrain_scatter, sort_by, yscale=yscale, task=task)
 
     # Opt-in third return value set, so the notebook can render the same
     # appendix table inline (bolding via a pandas Styler) instead of only
@@ -1071,6 +1104,7 @@ if __name__ == "__main__":
         error_column=args.error_column,
         connect_lines=args.connect_lines,
         combine_errors=args.combine_errors,
+        task=args.task,
     )
     
     print("\nFinal Aggregated Table:")

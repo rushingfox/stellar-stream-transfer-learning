@@ -10,19 +10,19 @@
 #   LR              default 5e-5 (OmniLearned CLI default)
 #   WD              default 0.0  (OmniLearned CLI default)
 #   BATCH           default 4 (per-rank; effective = 4 × 4 = 16)
-#   MODEL_SUFFIX    default _1x4
+#   MODEL_SUFFIX    default "" (none)
 #   SBATCH_QOS      default regular (script header)
 #   SBATCH_TIME     default 05:00:00 (script header)
 #   SBATCH_ARRAY    default 0-0 (single seed)
 #
 # Data: expected to already be in place at
-#   <repo>/<target_column>_<size>/omnilearned_proxy_pretrain_1x4/data/streams/{train,val,test}/
+#   <repo>/<target_column>_<size>/omnilearned_proxy_pretrain/data/streams/{train,val,test}/
 # (placed there ahead of time by prepare_data_proxy_pretrain.sh plus the
 # slicer step — this wrapper does not symlink or generate data itself).
 #
 # Usage:
 #   TARGET_COLUMN=3d_proxy_cube \
-#     bash scripts/stream_1x4/run_omnilearned_proxy_pretrain_1x4_submission.sh
+#     bash scripts/omnilearned/run_omnilearned_proxy_pretrain_submission.sh
 
 set -euo pipefail
 
@@ -33,7 +33,7 @@ epoch_num=${TOTAL_EPOCHS:-100}
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo_dir="$(cd "${script_dir}/../.." && pwd)"
 
-model_suffix=${MODEL_SUFFIX:-_1x4}
+model_suffix=${MODEL_SUFFIX:-}
 model="omnilearned_proxy_pretrain${model_suffix}"
 job_name="o_ppt${model_suffix}"
 
@@ -90,6 +90,6 @@ EOF
 (
     cd "${run_dir}"
     sbatch "${sbatch_args[@]}" --job-name="${job_name}" \
-        "${script_dir}/run_omnilearned_proxy_pretrain_1x4.sh" \
+        "${script_dir}/run_omnilearned_proxy_pretrain.sh" \
         "${num_feat}" "${num_classes}" "${epoch_num}"
 )

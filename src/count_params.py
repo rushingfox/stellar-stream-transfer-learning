@@ -62,7 +62,7 @@ def discover():
     """Yield (path, counter) for every run_0 checkpoint of a trained stream model."""
     for size in DATASET_SIZES:
         dataset_dir = get_dataset_dir(REPO_ROOT, TARGET_COLUMNS, size)
-        for path in sorted(dataset_dir.glob("baseline*/run_0/checkpoints/best_model_epoch_*.pt")):
+        for path in sorted(dataset_dir.glob("deepsets*/run_0/checkpoints/best_model_epoch_*.pt")):
             yield path, deepsets_counts
         for path in sorted(dataset_dir.glob("omni*/run_0/best_model_.pt")):
             yield path, omnilearned_counts

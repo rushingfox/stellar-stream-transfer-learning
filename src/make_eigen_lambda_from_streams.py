@@ -2,7 +2,7 @@
 the shared real-stream data.
 
 Input point clouds are exactly the 10000-size finetune data
-(``3d_x_y_z_10000/data/streams``), same streams and same train/val/test split;
+(``prog_mass_3d_x_y_z_10000/data/streams``), same streams and same train/val/test split;
 only the label changes. The label is the K-th largest PCA spatial scale,
 sqrt(lambda_K), computed exactly as ``prepare_data.py``'s
 ``3d_x_y_z_eigenvalues`` branch does (np.cov, eigvalsh, sorted descending,
@@ -21,7 +21,7 @@ import h5py
 import numpy as np
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-SRC_ROOT = REPO_ROOT / "3d_x_y_z_10000/data/streams"
+SRC_ROOT = REPO_ROOT / "prog_mass_3d_x_y_z_10000/data/streams"
 SPLITS = ("train", "val", "test")
 
 
@@ -43,7 +43,7 @@ def main():
     args = p.parse_args()
 
     k = args.index
-    dst_root = args.out_root / f"3d_x_y_z_eigenvalues_lambda{k}_10000/omnilearned_proxy_pretrain_1x4/data/streams"
+    dst_root = args.out_root / f"3d_x_y_z_eigenvalues_lambda{k}_10000/omnilearned_proxy_pretrain/data/streams"
     if dst_root.exists():
         raise SystemExit(f"{dst_root} already exists -- refusing to overwrite it.")
 

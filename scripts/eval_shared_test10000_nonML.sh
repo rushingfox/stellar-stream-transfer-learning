@@ -16,7 +16,7 @@ mamba activate stream_transfer_learning
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(cd "${script_dir}/.." && pwd)"
-# TASK=subhalo scores the subhalo task's non-ML baselines (subhalo_<target_columns>_<size>/).
+# TASK picks the folders (prog_mass_ or subhalo_<target_columns>_<size>/) and raw data.
 source "${script_dir}/task_config.sh"
 
 target_columns="3d_x_y_z"

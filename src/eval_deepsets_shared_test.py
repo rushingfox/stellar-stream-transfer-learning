@@ -1,8 +1,9 @@
-"""Re-scores a trained DeepSets baseline checkpoint against dataset_size=10000's
+"""Re-scores a trained DeepSets checkpoint against dataset_size=10000's
 test split instead of its own. Checkpoint selection is unchanged (still each
 run's own best-val epoch); features are normalized with the checkpoint's own
 train-split mean/std (not persisted anywhere, so recomputed here from
---dataset_size's own data) rather than the eval set's stats.
+--dataset_size's own data) rather than the eval set's stats. Writes
+run_<idx>/shared_test<N>/loss_history.csv and predictions.npz.
 """
 import argparse
 import glob
@@ -13,7 +14,7 @@ import numpy as np
 import pandas as pd
 import torch
 
-from exp_paths import DEFAULT_TASK, TASKS, find_label_key, get_dataset_dir, get_run_dir, get_results_dir, validate_dataset_size
+from exp_paths import DEFAULT_TASK, TASKS, find_label_key, get_dataset_dir, get_run_dir, get_shared_test_dir, validate_dataset_size
 from model import DeepSetsRegressor
 
 
@@ -24,7 +25,7 @@ def parse_args():
     p.add_argument('--task', type=str, choices=list(TASKS), default=DEFAULT_TASK)
     p.add_argument('--dataset_size', type=int, required=True,
                     help="dataset_size the checkpoint was trained on (used to locate the run + its own train-stat file)")
-    p.add_argument('--target_model', type=str, default="baseline_256")
+    p.add_argument('--target_model', type=str, default="deepsets")
     p.add_argument('--run_idx', type=int, required=True)
     p.add_argument('--eval_dataset_size', type=int, default=10000,
                     help="dataset_size whose test split is used as the shared/fixed evaluation set")
@@ -32,7 +33,6 @@ def parse_args():
                     help="optional check: read from the checkpoint; an explicit value that disagrees is an error")
     p.add_argument('--input_dim', type=int, default=3)
     p.add_argument('--batch_size', type=int, default=32)
-    p.add_argument('--output_csv_name', type=str, default="loss_history_shared_test10000.csv")
     return p.parse_args()
 
 
@@ -46,10 +46,10 @@ def hidden_dim_from_checkpoint(state_dict, override):
     return hidden_dim
 
 
-def shared_baseline_h5(repo_root, target_columns, dataset_size, task):
-    """<target_columns>_<size>/data/baseline_dataset.h5 -- one copy per size,
+def shared_deepsets_h5(repo_root, target_columns, dataset_size, task):
+    """<task>_<target_columns>_<size>/data/deepsets_dataset.h5 -- one copy per size,
     shared by every DeepSets width (like OmniLearned's data/streams/)."""
-    return get_dataset_dir(repo_root, target_columns, dataset_size, task) / "data" / "baseline_dataset.h5"
+    return get_dataset_dir(repo_root, target_columns, dataset_size, task) / "data" / "deepsets_dataset.h5"
 
 
 def compute_train_stats(h5_path, input_dim):
@@ -100,8 +100,8 @@ def main():
         print(f"Warning: {run_dir} does not exist. Skipping.")
         return
 
-    own_h5 = shared_baseline_h5(args.repo_root, args.target_columns, args.dataset_size, args.task)
-    eval_h5 = shared_baseline_h5(args.repo_root, args.target_columns, args.eval_dataset_size, args.task)
+    own_h5 = shared_deepsets_h5(args.repo_root, args.target_columns, args.dataset_size, args.task)
+    eval_h5 = shared_deepsets_h5(args.repo_root, args.target_columns, args.eval_dataset_size, args.task)
 
     ckpt_path = find_checkpoint(run_dir)
     best_epoch, best_val = read_own_best_val(run_dir)
@@ -129,8 +129,9 @@ def main():
     y = y.reshape(-1)
     test_mse = float(np.mean((preds - y) ** 2))
 
-    out_dir = get_results_dir(args.repo_root, args.target_columns, args.dataset_size, args.target_model, args.run_idx, args.task)
-    out_path = out_dir / args.output_csv_name
+    out_dir = get_shared_test_dir(args.repo_root, args.target_columns, args.dataset_size, args.target_model, args.run_idx,
+                                  eval_dataset_size=args.eval_dataset_size, task=args.task)
+    out_path = out_dir / "loss_history.csv"
     out_path.parent.mkdir(parents=True, exist_ok=True)
     pd.DataFrame([{"Epoch": best_epoch, "Val_Loss": best_val, "Test_Loss": test_mse}]).to_csv(out_path, index=False)
 

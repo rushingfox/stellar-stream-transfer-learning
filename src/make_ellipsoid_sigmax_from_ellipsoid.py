@@ -19,8 +19,8 @@ import numpy as np
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
-SRC_ROOT = REPO_ROOT / "3d_proxy_ellipsoid_10000/omnilearned_proxy_pretrain_1x4/data/streams"
-DST_ROOT = REPO_ROOT / "3d_proxy_gaussian_ellipsoid_sigmax_10000/omnilearned_proxy_pretrain_1x4/data/streams"
+SRC_ROOT = REPO_ROOT / "3d_proxy_ellipsoid_10000/omnilearned_proxy_pretrain/data/streams"
+DST_ROOT = REPO_ROOT / "3d_proxy_gaussian_ellipsoid_sigmax_10000/omnilearned_proxy_pretrain/data/streams"
 
 
 def slice_split(split: str) -> None:

@@ -17,7 +17,7 @@ from plot import plot_loss_curve, plot_test_loss_curve, plot_real_versus_predict
 
 def parse_args():
     parser = argparse.ArgumentParser(description="Training script for DeepSets Regressor")
-    parser.add_argument('--h5_file', type=str, default="../data/baseline_dataset.h5", help="Path to the dataset")
+    parser.add_argument('--h5_file', type=str, default="../../data/deepsets_dataset.h5", help="Path to the dataset")
     parser.add_argument('--batch_size', type=int, default=32, help="Batch size for training")
     parser.add_argument('--input_dim', type=int, default=3, help="Dimension of the input dataset")
     parser.add_argument('--lr', type=float, default=1e-3, help="Learning rate")
