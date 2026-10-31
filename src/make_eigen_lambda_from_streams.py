@@ -3,14 +3,16 @@ the shared real-stream data.
 
 Input point clouds are exactly the 10000-size finetune data
 (``prog_mass_3d_x_y_z_10000/data/streams``), same streams and same train/val/test split;
-only the label changes. The label is the K-th largest PCA spatial scale,
-sqrt(lambda_K), computed exactly as ``prepare_data.py``'s
-``3d_x_y_z_eigenvalues`` branch does (np.cov, eigvalsh, sorted descending,
-sqrt) and z-scored with train-split statistics. lambda1 ~ stream length,
-lambda2 / lambda3 ~ width / thickness.
+only the label changes. Those inputs are already normalized with that train
+split's input stats, which are this proxy's own train stats too, so they are
+copied as-is together with input_stats.npz. The label is the K-th largest PCA
+spatial scale, sqrt(lambda_K), of the raw coordinates in kpc (read from
+--input_raw, not from the normalized inputs), computed exactly as
+``prepare_data.py``'s ``3d_x_y_z_eigenvalues`` branch does (np.cov, eigvalsh,
+sorted descending, sqrt) and z-scored with train-split statistics.
+lambda1 ~ stream length, lambda2 / lambda3 ~ width / thickness.
 
-No 3-target ``3d_x_y_z_eigenvalues`` parent dataset is needed; for K=1 the
-output is byte-identical to the one the paper's lambda1 proxy was trained on.
+No 3-target ``3d_x_y_z_eigenvalues`` parent dataset is needed.
 
     python src/make_eigen_lambda_from_streams.py --index 2
 """
@@ -20,8 +22,11 @@ from pathlib import Path
 import h5py
 import numpy as np
 
+from exp_paths import INPUT_STATS_NPZ
+
 REPO_ROOT = Path(__file__).resolve().parent.parent
 SRC_ROOT = REPO_ROOT / "prog_mass_3d_x_y_z_10000/data/streams"
+RAW_H5 = REPO_ROOT / "raw_data/prog_mass_reg_dataset_10000.h5"
 SPLITS = ("train", "val", "test")
 
 
@@ -40,6 +45,8 @@ def main():
     p.add_argument("--index", type=int, choices=(1, 2, 3), required=True, help="which lambda: 1 = largest")
     p.add_argument("--out_root", type=Path, default=REPO_ROOT,
                    help="repo-like root to write into (default: the repo itself)")
+    p.add_argument("--input_raw", type=Path, default=RAW_H5,
+                   help="raw HDF5 the 10000-size finetune data was made from (default: %(default)s)")
     args = p.parse_args()
 
     k = args.index
@@ -48,10 +55,14 @@ def main():
         raise SystemExit(f"{dst_root} already exists -- refusing to overwrite it.")
 
     scales = {}
-    for split in SPLITS:
-        with h5py.File(SRC_ROOT / split / f"{split}_streams.hdf5", "r") as f:
-            scales[split] = sqrt_eigenvalues(f["data"][:])
-        print(f"  {split}: {scales[split].shape[0]} streams")
+    with h5py.File(args.input_raw, "r") as raw:
+        for split in SPLITS:
+            with h5py.File(SRC_ROOT / split / f"{split}_streams.hdf5", "r") as f:
+                idx = f["original_idx"][:]
+            # Each split is one contiguous block of the raw streams.
+            assert np.array_equal(idx, np.arange(idx[0], idx[-1] + 1)), f"{split}: original_idx is not contiguous"
+            scales[split] = sqrt_eigenvalues(raw["Cartesian_data"][idx[0]:idx[-1] + 1, :, [0, 1, 2]])
+            print(f"  {split}: {scales[split].shape[0]} streams")
 
     # z-score with train-split statistics only (population std). Taken over all
     # three columns and then indexed -- the same operation order as
@@ -70,6 +81,7 @@ def main():
         (dst_dir / "file_index.npy").write_bytes((src_dir / "file_index.npy").read_bytes())
 
     np.savez(dst_root / f"eigenvalue_lambda{k}_stats.npz", mean=np.array([mean]), std=np.array([std]))
+    (dst_root / INPUT_STATS_NPZ).write_bytes((SRC_ROOT / INPUT_STATS_NPZ).read_bytes())
     print(f"sqrt(lambda{k}) train mean={mean:.4f} std={std:.4f}\nDone: {dst_root}")
 
 

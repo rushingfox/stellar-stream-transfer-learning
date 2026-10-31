@@ -1,7 +1,7 @@
 module load conda
 mamba activate stream_transfer_learning
 
-dataset_sizes_default=(300 1000 10000)
+dataset_sizes_default=(40 100 300 1000)
 if [[ -n "${DATASET_SIZE:-}" ]]; then
     read -r -a dataset_sizes <<< "${DATASET_SIZE}"
 else
@@ -76,8 +76,11 @@ else
     run_indices=("${run_indices_default[@]}")
 fi
 
+# $2: the run's target_stats.npz (downstream runs only; proxy pretrains pass none).
 run_summary() {
     local run_dir="$1"
+    local stats_args=()
+    [[ -n "${2:-}" ]] && stats_args=(--target_stats "$2")
     if [ ! -d "$run_dir" ]; then
         echo "Warning: Directory ${run_dir} does not exist. Skipping."
         return
@@ -87,7 +90,8 @@ run_summary() {
     python ../src/omnilearned_summary.py \
         --json_path "${run_dir}/training_.json" \
         --npz_glob "${run_dir}/outputs__streams_*.npz" \
-        --output_csv "${results_dir}/loss_history.csv"
+        --output_csv "${results_dir}/loss_history.csv" \
+        "${stats_args[@]}"
 }
 
 # Finetune loop
@@ -95,7 +99,8 @@ for dataset_size in "${dataset_sizes[@]}"; do
     for col in "${target_columns[@]}"; do
         for model in "${target_models[@]}"; do
             for idx in "${run_indices[@]}"; do
-                run_summary "../${task_dir_prefix}${col}_${dataset_size}/${model}/run_${idx}"
+                run_summary "../${task_dir_prefix}${col}_${dataset_size}/${model}/run_${idx}" \
+                    "../${task_dir_prefix}${col}_${dataset_size}/data/streams/target_stats.npz"
             done
         done
     done

@@ -25,7 +25,7 @@
 #SBATCH --gpus-per-node=4
 #SBATCH --ntasks-per-node=1
 #SBATCH --cpus-per-task=32
-#SBATCH --time=03:00:00
+#SBATCH --time=05:00:00
 #SBATCH --array=0-2
 #SBATCH --output=logs/%x_%A_%a.out
 #SBATCH --error=logs/%x_%A_%a.err
@@ -66,19 +66,24 @@ if [[ -n "${SLURM_ARRAY_TASK_ID:-}" ]]; then
     cd "./run_${CURRENT_IDX}"
 fi
 
+# Refuse stale data (scripts/omnilearned/check_data.sh). The submitter checks
+# too, but this runner is also started directly, e.g. in a Jupyter session.
+source "${REPO_ROOT}/scripts/omnilearned/check_data.sh"
+require_downstream_data ../../data || exit 1
+
 NUM_FEAT=${1:?Error: need num_feat}
 LOAD_TAG=${2:?Error: need load_tag}
 TOTAL_EPOCHS=${3:?Error: need epoch_num}
 
-# Copy pretrain checkpoint from finetune dir (one level up) into run subdir.
+# Copy the pretrain checkpoint from the finetune dir (one level up) into the run
+# subdir, every time: a copy left in run_N/ from an earlier pretraining would
+# otherwise be finetuned from silently.
 CKPT_SRC="../best_model_${LOAD_TAG}.pt"
-if [[ ! -f "./best_model_${LOAD_TAG}.pt" ]]; then
-    if [[ ! -f "${CKPT_SRC}" ]]; then
-        echo "Error: pretrain checkpoint not found at ${CKPT_SRC}" >&2
-        exit 1
-    fi
-    cp "${CKPT_SRC}" ./
+if [[ ! -f "${CKPT_SRC}" ]]; then
+    echo "Error: pretrain checkpoint not found at ${CKPT_SRC}" >&2
+    exit 1
 fi
+cp "${CKPT_SRC}" ./
 
 # MASTER_PORT: derive from SLURM_JOB_ID (both sbatch and JupyterHub set this).
 # Kept in 15000-30000 range to avoid Linux ephemeral port collisions (32768+).
@@ -238,6 +243,13 @@ python3 "${REPO_ROOT}/src/omnilearned_summary.py" \
     --json_path "./training_.json" \
     --npz_glob "./outputs__streams_*.npz" \
     --output_csv "./results/loss_history.csv" \
+    --target_stats ../../data/streams/target_stats.npz \
     || echo "Warning: results summary generation failed (non-fatal, training/eval already succeeded)" >&2
+
+echo "---------------------------------------"
+echo "[1x4 finetune] Shared-test evaluation and bootstrap"
+RUN_DIR="$(pwd)" FORCE=1 bash "${REPO_ROOT}/scripts/eval_shared_test10000.sh" \
+    && python3 "${REPO_ROOT}/src/compute_bootstrap_shared_test.py" --run_dir "$(pwd)" \
+    || echo "Warning: shared-test evaluation failed (non-fatal; rerun it with scripts/eval_shared_test10000.sh)" >&2
 
 echo "Run completed."

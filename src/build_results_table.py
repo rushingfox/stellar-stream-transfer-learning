@@ -35,7 +35,7 @@ _PRETTY_MODEL_NAMES = {
     'DeepSets_256':          'DeepSets',
     'average':               'Mean Baseline',
     'eigenvalue_regression': 'Eigenvalue Regression',
-    'OmniLearned_Scratch':   'OmniLearned (Scratch)',
+    # OmniLearned_Scratch and its lr sweep are named in _pretty_model_name.
     'OmniLearned_Finetune':  'OmniLearned (HEP Jets)',
     'proxy_cube':            'Cube',
     'proxy_bounded_ball':    'Bounded Ball',
@@ -54,7 +54,39 @@ _PRETTY_MODEL_NAMES = {
 
 
 def _pretty_model_name(name):
+    if name == SCRATCH_MODEL:
+        return rf"OmniLearned (Scratch, lr $= {_latex_lr(DEFAULT_SCRATCH_LR)}$)"
+    if name == VAL_SELECTED_SCRATCH_MODEL:
+        return "OmniLearned (Scratch, val-selected lr)"
+    if name.startswith(SCRATCH_LR_PREFIX):
+        return rf"OmniLearned (Scratch, lr $= {_latex_lr(_scratch_lr(name))}$)"
     return _PRETTY_MODEL_NAMES.get(name, name.replace('_', ' '))
+
+
+# Scratch learning-rate sweep. The default-lr run is OmniLearned_Scratch (the
+# runner's LR default); each other lr is its own model, OmniLearned_Scratch_lr<lr>.
+# The figure shows only one scratch point per size, for the lr with the lowest
+# mean best-val loss (VAL_SELECTED_SCRATCH_MODEL); the table has that point as
+# its own row, then every lr with the selected one marked.
+SCRATCH_MODEL = 'OmniLearned_Scratch'
+SCRATCH_LR_PREFIX = 'OmniLearned_Scratch_lr'
+VAL_SELECTED_SCRATCH_MODEL = 'OmniLearned_Scratch_ValLR'
+DEFAULT_SCRATCH_LR = '5e-5'  # LR default of scripts/omnilearned/run_omnilearned_scratch.sh
+
+
+def _is_scratch_sweep_member(name):
+    return name == SCRATCH_MODEL or name.startswith(SCRATCH_LR_PREFIX)
+
+
+def _scratch_lr(name):
+    """'OmniLearned_Scratch' -> '5e-5'; 'OmniLearned_Scratch_lr2e-4' -> '2e-4'."""
+    return DEFAULT_SCRATCH_LR if name == SCRATCH_MODEL else name[len(SCRATCH_LR_PREFIX):]
+
+
+def _latex_lr(lr):
+    """'2e-4' -> '2\\times10^{-4}' (math mode, without the dollar signs)."""
+    mantissa, exponent = lr.split('e')
+    return rf"{mantissa}\times10^{{{int(exponent)}}}"
 
 
 # Pretrain train-split sizes, for generate_pretrain_size_scatter.
@@ -135,6 +167,11 @@ _CATEGORY_STYLE = {
 _OPTIONAL_MODEL_COLORS = {
     'deepsets_1024':                    '#7f3b08',  # DeepSets 256 '#a6763d'
     'omnilearned_scratch_m':            '#2c4a5a',  # OmniLearned Scratch '#5b7c8d'
+    # Scratch lr sweep: the per-lr rows only appear in the table, so their
+    # color is never drawn but keeps them out of the category swatches. The
+    # val-selected point replaces OmniLearned Scratch in the figure and takes
+    # its swatch.
+    'omnilearned_scratch_lr':           '#5b7c8d',
     'omnilearned_finetune_m':           '#a63603',  # OmniLearned Finetune '#e6550d'
     'proxy_stream_eigenvalues_lambda2': '#f768a1',  # Real-Stream PCA '#c51b8a'
     'proxy_stream_eigenvalues_lambda3': '#7a0177',
@@ -144,10 +181,16 @@ _OPTIONAL_MODEL_COLORS = {
 _BASELINE_RANK = {
     'average': 0,
     'eigenvalue_regression': 1,
+    'deepsets': 2,                 # hidden 1024, the default DeepSets
     'deepsets_256': 2,
     'baseline_256': 2,
     'deepsets_1024': 2.5,          # optional, next to DeepSets 256
     'omnilearned_scratch': 3,
+    'omnilearned_scratch_vallr': 2.9,   # first scratch row of the table; the figure's only scratch point
+    'omnilearned_scratch_lr1e-4': 3.1,  # table only, in lr order
+    'omnilearned_scratch_lr2e-4': 3.2,
+    'omnilearned_scratch_lr5e-4': 3.3,
+    'omnilearned_scratch_lr1e-3': 3.4,
     'omnilearned_scratch_m': 3.5,  # optional, next to OmniLearned Scratch
 }
 
@@ -276,8 +319,8 @@ def parse_args():
                              "alternative to --r2_reference_raw that doesn't need the full "
                              "raw dataset on disk -- used by the reproduce_main_figure "
                              "notebook. Takes priority over --r2_reference_raw if both are set.")
-    parser.add_argument('--r2_ymin', type=float, default=0.0,
-                        help="Scatter plot y-axis lower bound with --metric r2 (default: 0.0). "
+    parser.add_argument('--r2_ymin', type=float, default=-0.3,
+                        help="Scatter plot y-axis lower bound with --metric r2 (default: -0.3). "
                              "Ignored with --relative_to_scratch (range is auto).")
     parser.add_argument('--relative_to_scratch', action='store_true',
                         help="Scatter plot shows (model - scratch) / scratch per dataset "
@@ -348,8 +391,11 @@ def parse_args():
     parser.add_argument('--task', type=str, default=DEFAULT_TASK, choices=sorted(TASKS),
                         help="Downstream task of every --models entry: its folders are "
                              "<task>_<target_columns>_<size>/ (default: prog_mass)")
-    parser.add_argument('--epochs', type=int, default=50,
-                        help="Only consider the first N epochs when selecting best loss")
+    parser.add_argument('--epochs', type=int, default=100,
+                        help="Only consider the first N epochs when selecting best loss "
+                             "(default 100, the training default; runs trained longer "
+                             "need at least their epoch count, or their rows past it "
+                             "are dropped)")
     return parser.parse_args()
 
 
@@ -516,6 +562,32 @@ def summarize_model(repo_root, target_columns, dataset_size, target_model, indic
     return display_row, plot_row
 
 
+def select_scratch_lr(plot_rows):
+    """For each dataset size with a scratch lr sweep, pick the lr whose mean
+    best-val loss across seeds is lowest (ties go to the smaller lr).
+
+    Returns (selected, val_rows): selected maps Dataset -> the chosen sweep
+    member's Model_Name, and val_rows holds one VAL_SELECTED_SCRATCH_MODEL plot
+    row per size, a copy of the chosen member's row carrying its lr in
+    'Selected_LR'. Sizes without any non-default lr get no selection."""
+    by_dataset = defaultdict(list)
+    for row in plot_rows:
+        if _is_scratch_sweep_member(row["Model_Name"]):
+            by_dataset[row["Dataset"]].append(row)
+
+    selected, val_rows = {}, []
+    for ds, rows in by_dataset.items():
+        if not any(r["Model_Name"].startswith(SCRATCH_LR_PREFIX) for r in rows):
+            continue
+        best = min(rows, key=lambda r: (r["Mean Val MSE"], float(_scratch_lr(r["Model_Name"]))))
+        selected[ds] = best["Model_Name"]
+        val_rows.append({**best,
+                         "Model": f"{ds}+{VAL_SELECTED_SCRATCH_MODEL}",
+                         "Model_Name": VAL_SELECTED_SCRATCH_MODEL,
+                         "Selected_LR": _scratch_lr(best["Model_Name"])})
+    return selected, val_rows
+
+
 def generate_bar_chart(df, save_plot_path, sort_metric, yscale="log"):
     if df.empty:
         return
@@ -579,7 +651,7 @@ def compute_test_label_variance_from_labels(labels_npy_path):
     return float(np.var(np.load(labels_npy_path).ravel()))
 
 
-def generate_scatter_plot(df, save_plot_path, sort_metric, yscale="log", metric="mse", r2_reference_var=None, r2_ymin=0.0, relative_to_scratch=False, relative_baseline_model="OmniLearned_Scratch", relative_ymin=-1.0, relative_ymax=1.0, scatter_ylabel=None, scatter_ymin=None, scatter_ymax=None, connect_lines=False):
+def generate_scatter_plot(df, save_plot_path, sort_metric, yscale="log", metric="mse", r2_reference_var=None, r2_ymin=-0.3, relative_to_scratch=False, relative_baseline_model="OmniLearned_Scratch", relative_ymin=-1.0, relative_ymax=1.0, scatter_ylabel=None, scatter_ymin=None, scatter_ymax=None, connect_lines=False):
 
     if df.empty:
         return
@@ -679,6 +751,9 @@ def generate_scatter_plot(df, save_plot_path, sort_metric, yscale="log", metric=
     # and a narrow band would have been invisible.
     band_width = 0.05
 
+    # (x, y, error) of every drawn point, for the annotations added below.
+    points = {}
+
     for m_idx, (model, marker, color) in enumerate(ordered_styles):
         model_data = df[df['Model_Name'] == model]
         if model_data.empty:
@@ -692,6 +767,7 @@ def generate_scatter_plot(df, save_plot_path, sort_metric, yscale="log", metric=
             y_errs.append(row[error_col])
             if has_nested_error:
                 y_stats.append(row[stat_col])
+            points[(model, row['Dataset'])] = (x_vals[-1], y_vals[-1], y_errs[-1])
 
         if has_nested_error:
             # Statistical component (e.g. mean bootstrap std across seeds) as
@@ -757,16 +833,43 @@ def generate_scatter_plot(df, save_plot_path, sort_metric, yscale="log", metric=
 
     plt.xlabel("Fine-Tuning dataset size", fontsize=14, fontweight='bold')
     plt.ylabel(y_label, fontsize=14, fontweight='bold')
-    plt.title("Impact of Pretraining Dataset on Progenitor Mass Regression",
-              fontsize=16, fontweight='bold')
     plt.yscale(yscale)
     if relative_to_scratch:
         plt.ylim(relative_ymin, relative_ymax)  # not a hard data bound, just a sane default
         plt.gca().yaxis.set_major_formatter(PercentFormatter(xmax=1.0))
     elif metric == "r2":
-        plt.ylim(bottom=r2_ymin, top=1.0)  # R^2 cannot exceed 1 by definition
+        # R^2 cannot exceed 1, but a little headroom above it keeps the best-
+        # model star (drawn above the top error bar) inside the frame.
+        plt.ylim(bottom=r2_ymin, top=1.0 + 0.03 * (1.0 - r2_ymin))
     if scatter_ymin is not None or scatter_ymax is not None:
         plt.ylim(bottom=scatter_ymin, top=scatter_ymax)  # explicit override, takes priority over the above
+
+    style_of = {m: (marker, color) for m, marker, color in ordered_styles}
+    # Dashed reference line across each size's region at the scratch value
+    # (the val-selected lr when there is a sweep), so every point reads as
+    # above or below training from scratch. Skipped in the relative view,
+    # where scratch is the zero line.
+    scratch_ref = next((m for m in (VAL_SELECTED_SCRATCH_MODEL, SCRATCH_MODEL) if m in style_of), None)
+    if not relative_to_scratch and scratch_ref is not None:
+        for ds, i in x_mapping.items():
+            if (scratch_ref, ds) in points:
+                ax.hlines(points[(scratch_ref, ds)][1], i - 0.5, i + 0.5,
+                          colors=style_of[scratch_ref][1], linestyles='--',
+                          linewidth=0.9, alpha=0.7, zorder=2)
+
+    # A small star above the best mean of each size, matching the bold cell of
+    # the LaTeX table (higher is better for R^2, lower for MSE).
+    higher_is_better = metric == "r2"
+    for ds in datasets:
+        ds_points = {m: p for (m, d), p in points.items() if d == ds}
+        if not ds_points:
+            continue
+        best = (max if higher_is_better else min)(ds_points, key=lambda m: ds_points[m][1])
+        x, y, err = ds_points[best]
+        ax.annotate(r"$\star$", xy=(x, y + err), xytext=(0, 2), textcoords='offset points',
+                    ha='center', va='bottom', fontsize=11, color='0.35', zorder=5,
+                    annotation_clip=True)
+
     plt.legend(title="Models", bbox_to_anchor=(1.05, 1), loc='upper left', fontsize=10)
     plt.tight_layout()
     
@@ -869,9 +972,11 @@ def generate_pretrain_size_scatter(df, save_plot_path, sort_metric, finetune_dat
     plt.close()
 
 
-def generate_latex_table(df, save_path=None, sort_metric="test", r2_reference_var=None):
+def generate_latex_table(df, save_path=None, sort_metric="test", r2_reference_var=None, selected_scratch=None):
     """R^2 table for the appendix: one row per model, one column per fine-tuning
     dataset size, cells "mean +- total (bootstrap)", best mean per column bolded.
+    selected_scratch (Dataset -> Model_Name, from select_scratch_lr) puts a
+    dagger on the scratch lr chosen by validation loss in each column.
 
     Emits a bare `tabular` (booktabs rules, no `table` float and no caption) so
     the paper supplies its own caption/label -- in particular the note that the
@@ -914,7 +1019,13 @@ def generate_latex_table(df, save_path=None, sort_metric="test", r2_reference_va
 
     # Rows follow the scatter plot's legend order (category grouping, then
     # within-category rank) so table and figure can be read side by side.
-    model_order = [m for m, _, _ in build_model_styles(list(tidy["model"].unique()))]
+    # Sorted here rather than through build_model_styles, which also hands out
+    # colors: with the lr sweep the table has more scratch rows than the
+    # baseline category has colors.
+    def _order_key(m):
+        cat = categorize_model(m)
+        return _CATEGORY_ORDER.index(cat), _rank(m, _RANK_TABLES[cat])
+    model_order = sorted(tidy["model"].unique(), key=_order_key)
     ds_order = sorted(tidy["dataset"].unique(),
                       key=lambda k: int(re.search(r'(\d+)$', k).group(1)))
     best_r2 = {ds: tidy.loc[tidy["dataset"] == ds, "r2"].max() for ds in ds_order}
@@ -946,9 +1057,12 @@ def generate_latex_table(df, save_path=None, sort_metric="test", r2_reference_va
                 continue
             row = match.iloc[0]
             is_best = bool(np.isclose(row["r2"], best_r2[ds]))
+            is_selected = bool(selected_scratch) and selected_scratch.get(ds) == model
             body = f"{row['r2']:.3f} \\pm {row['err']:.3f}\\,({row['stat']:.3f})"
-            cells.append(f"$\\mathbf{{{body}}}$" if is_best else f"${body}$")
-            plain_cells.append(f"{row['r2']:.3f} ± {row['err']:.3f} ({row['stat']:.3f})")
+            math = f"\\mathbf{{{body}}}" if is_best else body
+            cells.append(f"${math}^\\dagger$" if is_selected else f"${math}$")
+            plain_cells.append(f"{row['r2']:.3f} ± {row['err']:.3f} ({row['stat']:.3f})"
+                               + (" †" if is_selected else ""))
             mask_cells.append(is_best)
 
         label = _pretty_model_name(model)
@@ -958,6 +1072,10 @@ def generate_latex_table(df, save_path=None, sort_metric="test", r2_reference_va
         mask_rows.append(mask_cells)
 
     lines += [r"\bottomrule", r"\end{tabular}", "}"]
+    if selected_scratch:
+        # The table is a bare tabular, so the caption that explains the
+        # dagger lives in the paper; this comment is the reminder.
+        lines.append("% dagger: the scratch lr with the lowest mean best-val loss at this size.")
     latex_str = "\n".join(lines) + "\n"
 
     display_df = pd.DataFrame(display_rows, index=row_labels, columns=col_labels)
@@ -973,7 +1091,7 @@ def generate_latex_table(df, save_path=None, sort_metric="test", r2_reference_va
     return latex_str, display_df, best_mask
 
 
-def build_table(model_list, repo_root, epochs, indices, save_csv=None, save_plot=None, save_scatter=None, save_pretrain_scatter=None, save_latex=None, return_table_frames=False, sort_by="test", test_csv_name="results/loss_history.csv", yscale="log", metric="mse", r2_reference_var=None, r2_ymin=0.0, relative_to_scratch=False, relative_baseline_model="OmniLearned_Scratch", relative_ymin=-1.0, relative_ymax=1.0, scatter_ylabel=None, value_column="Test_Loss", scatter_ymin=None, scatter_ymax=None, error_column=None, connect_lines=False, combine_errors=False, task=DEFAULT_TASK):
+def build_table(model_list, repo_root, epochs, indices, save_csv=None, save_plot=None, save_scatter=None, save_pretrain_scatter=None, save_latex=None, return_table_frames=False, sort_by="test", test_csv_name="results/loss_history.csv", yscale="log", metric="mse", r2_reference_var=None, r2_ymin=-0.3, relative_to_scratch=False, relative_baseline_model="OmniLearned_Scratch", relative_ymin=-1.0, relative_ymax=1.0, scatter_ylabel=None, value_column="Test_Loss", scatter_ymin=None, scatter_ymax=None, error_column=None, connect_lines=False, combine_errors=False, task=DEFAULT_TASK):
     display_rows = []
     plot_rows = []
 
@@ -1009,12 +1127,25 @@ def build_table(model_list, repo_root, epochs, indices, save_csv=None, save_plot
         df_out.to_csv(save_csv, index=False)
         print(f"Saved CSV -> {save_csv}")
 
+    # Scratch lr sweep: the table lists every lr, the figure only the
+    # val-selected one. The relative view keeps the default-lr scratch, since
+    # it is that view's reference model.
+    selected_scratch, val_selected_rows = select_scratch_lr(plot_rows)
+    for ds, model in sorted(selected_scratch.items(),
+                            key=lambda kv: int(re.search(r'(\d+)$', kv[0]).group(1))):
+        print(f"Val-selected scratch lr for {ds}: {_scratch_lr(model)}")
+    drop_default_scratch = bool(val_selected_rows) and not relative_to_scratch
+    scatter_rows = [r for r in plot_rows
+                    if not r["Model_Name"].startswith(SCRATCH_LR_PREFIX)
+                    and not (drop_default_scratch and r["Model_Name"] == SCRATCH_MODEL)]
+    scatter_rows += val_selected_rows
+
     # Appendix table (R^2, models x dataset sizes)
     table_df = best_mask = None
     if (save_latex or return_table_frames) and plot_rows:
         _, table_df, best_mask = generate_latex_table(
-            pd.DataFrame(plot_rows), save_latex, sort_by,
-            r2_reference_var=r2_reference_var)
+            pd.DataFrame(plot_rows + val_selected_rows), save_latex, sort_by,
+            r2_reference_var=r2_reference_var, selected_scratch=selected_scratch)
 
     # Figure 1
     if save_plot and plot_rows:
@@ -1025,7 +1156,7 @@ def build_table(model_list, repo_root, epochs, indices, save_csv=None, save_plot
 
     # Figure 2: scattering plot
     if save_scatter and plot_rows:
-        plot_df_scatter = pd.DataFrame(plot_rows)
+        plot_df_scatter = pd.DataFrame(scatter_rows)
         generate_scatter_plot(plot_df_scatter, save_scatter, sort_by, yscale=yscale,
                               metric=metric, r2_reference_var=r2_reference_var, r2_ymin=r2_ymin,
                               relative_to_scratch=relative_to_scratch,

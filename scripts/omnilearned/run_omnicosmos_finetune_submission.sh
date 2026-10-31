@@ -23,7 +23,7 @@
 #                         OmniCosmos pretrain's own simulation-count bucket —
 #                         independent of our stream DATASET_SIZE below)
 #   DATASET_SIZE          default 10000 (the stream finetune dataset size)
-#   EPOCH_NUM             default 50
+#   EPOCH_NUM             default 100
 #   MODEL_SUFFIX          default "" (appended to the finetune dir)
 #   SBATCH_QOS / SBATCH_TIME / SBATCH_ARRAY
 
@@ -31,7 +31,7 @@ set -euo pipefail
 
 pretrain_source=${PRETRAIN_SOURCE:?Error: set PRETRAIN_SOURCE (camels or quijote)}
 dataset_size=${DATASET_SIZE:-10000}
-epoch_num=${EPOCH_NUM:-50}
+epoch_num=${EPOCH_NUM:-100}
 model_suffix=${MODEL_SUFFIX:-}
 
 case "${pretrain_source}" in
@@ -41,18 +41,19 @@ case "${pretrain_source}" in
 esac
 checkpoint_size=${CHECKPOINT_SIZE:-${default_checkpoint_size}}
 
-# Auto-tighten the time estimate for the two smaller sizes unless the user
-# explicitly overrides — validated: 100/1000 finish well within 30 min for
-# every other 1x4 finetune variant; 10000 stays on the runner script's own
-# SBATCH --time default (3h). QOS stays regular (not debug): debug caps
+# Auto-tighten the time estimate for the smaller sizes unless the user
+# explicitly overrides, as for every other finetune (see there): 40/100 get
+# 30 min, 300 1h and 1000 1h30; 10000 stays on the runner script's own
+# SBATCH --time default (5h). QOS stays regular (not debug): debug caps
 # concurrent jobs per user at ~3, which becomes a bottleneck once you're
 # submitting many seeds/models in parallel; regular has no such cap and
 # these jobs are short regardless. Explicit SBATCH_QOS/SBATCH_TIME always
 # take priority.
-if [[ "${dataset_size}" == "100" || "${dataset_size}" == "300" || "${dataset_size}" == "1000" ]]; then
-    SBATCH_QOS="${SBATCH_QOS:-regular}"
-    SBATCH_TIME="${SBATCH_TIME:-00:30:00}"
-fi
+case "${dataset_size}" in
+    40|100) SBATCH_QOS="${SBATCH_QOS:-regular}"; SBATCH_TIME="${SBATCH_TIME:-00:30:00}" ;;
+    300)    SBATCH_QOS="${SBATCH_QOS:-regular}"; SBATCH_TIME="${SBATCH_TIME:-01:00:00}" ;;
+    1000)   SBATCH_QOS="${SBATCH_QOS:-regular}"; SBATCH_TIME="${SBATCH_TIME:-01:30:00}" ;;
+esac
 
 target_column="3d_x_y_z"
 pretrain_tag="fine_tune_${pretrain_source}_s_${checkpoint_size}"
@@ -73,10 +74,9 @@ if [[ ! -f "${pretrain_ckpt}" ]]; then
     exit 1
 fi
 
-if [[ ! -d "${dataset_dir}/data/streams/train" ]]; then
-    echo "Error: shared stream data not found at ${dataset_dir}/data/streams/train" >&2
-    exit 1
-fi
+# Refuse stale data before queueing (the runner checks again before training).
+source "${script_dir}/check_data.sh"
+require_downstream_data "${dataset_dir}/data" || exit 1
 
 mkdir -p "${run_dir}/logs"
 cp -f "${pretrain_ckpt}" "${run_dir}/best_model_${pretrain_tag}.pt"

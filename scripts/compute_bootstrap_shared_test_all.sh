@@ -10,7 +10,7 @@
 # no GPU needed).
 #
 # Usage: bash scripts/compute_bootstrap_shared_test_all.sh
-# Env overrides: TASK (default prog_mass), DATASET_SIZES (default "300 1000 10000"), RUN_IDXS (default
+# Env overrides: TASK (default prog_mass), DATASET_SIZES (default "40 100 300 1000"), RUN_IDXS (default
 # "0" -- bootstrap fixes a single trained model, not a cross-seed statistic),
 # EVAL_DATASET_SIZE (default 10000), N_BOOT (default 1000)
 
@@ -31,7 +31,7 @@ n_boot=${N_BOOT:-1000}
 if [[ -n "${DATASET_SIZES:-}" ]]; then
     read -r -a dataset_sizes <<< "${DATASET_SIZES}"
 else
-    dataset_sizes=(300 1000 10000)
+    dataset_sizes=(40 100 300 1000)
 fi
 
 if [[ -n "${RUN_IDXS:-}" ]]; then

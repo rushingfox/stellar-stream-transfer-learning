@@ -7,7 +7,13 @@ import time
 import datetime
 from tqdm import tqdm
 import sys
-from exp_paths import DEFAULT_TASK, TASKS, VALID_DATASET_SIZES, dataset_key, get_data_dir
+from exp_paths import (DEFAULT_TASK, EVAL_DATASET_SIZE, INPUT_STATS_NPZ, TARGET_STATS_NPZ, TASKS, VALID_DATASET_SIZES,
+                       compute_input_stats, dataset_key, get_data_dir, load_input_stats, shared_test_dirname)
+
+# Real-stream inputs (the downstream tasks, not the proxies): the x, y, z
+# columns of the raw Cartesian_data.
+REAL_STREAM_COLUMNS = ('3d_x_y_z',)
+XYZ_COLUMNS = [0, 1, 2]
 
 
 def parse_args():
@@ -19,23 +25,16 @@ def parse_args():
     parser.add_argument('--output_model', type=str, default="", help="Optional model folder name override for saving outputs")
     parser.add_argument('--task', type=str, choices=list(TASKS), default=DEFAULT_TASK,
                         help="Regression task: sets the output folder prefix and the DeepSets label key")
-    parser.add_argument('--target_columns', type=str, choices=['3d_x_y_z', '3d_ra_dec_parallax', '4d_x_y_z_vtotal', '4d_ra_dec_parallax_vtotal', '6d_x_y_z_vx_vy_vz', '6d_ra_dec_parallax_proper_motions', '3d_proxy_ellipsoid', '3d_proxy_cube', '3d_proxy_bounded_ball', '3d_proxy_gaussian_ball', '3d_proxy_hard_ellipsoid', '3d_proxy_box', '3d_x_y_z_eigenvalues'], required=True)
+    parser.add_argument('--target_columns', type=str, choices=['3d_x_y_z', '3d_proxy_ellipsoid', '3d_proxy_cube', '3d_proxy_bounded_ball', '3d_proxy_gaussian_ball', '3d_proxy_hard_ellipsoid', '3d_proxy_box', '3d_x_y_z_eigenvalues'], required=True)
+    parser.add_argument('--shared_test_raw', type=str, default=None,
+                        help=f"Raw HDF5 of the size-{EVAL_DATASET_SIZE} dataset. With a real-stream "
+                             f"--target_columns, also writes its test split, with inputs normalized with "
+                             f"this dataset's input stats, to data/{shared_test_dirname()}/ for the "
+                             f"shared-test evaluation")
 
     args = parser.parse_args()
-    omnilearned_valid_modes = [
-        '3d_x_y_z',
-        '4d_x_y_z_vtotal',
-        '6d_x_y_z_vx_vy_vz',
-        '3d_proxy_ellipsoid',
-        '3d_proxy_cube',
-        '3d_proxy_bounded_ball',
-        '3d_proxy_gaussian_ball',
-        '3d_proxy_hard_ellipsoid',
-        '3d_proxy_box',
-        '3d_x_y_z_eigenvalues'
-    ]
-    if 'omni' in args.target_model and args.target_columns not in omnilearned_valid_modes:
-        print(f"[INFO] Skipping: model='{args.target_model}' cannot use columns='{args.target_columns}'. (Requires x/y/z)")
+    if args.target_model == 'deepsets' and args.target_columns not in REAL_STREAM_COLUMNS:
+        print(f"[INFO] Skipping: DeepSets data exists only for the real streams, not columns='{args.target_columns}'.")
         sys.exit(0)
 
     return args
@@ -53,38 +52,86 @@ def validate_input_raw_size(input_raw, dataset_size):
             f"but found {actual_size} samples in {input_raw}."
         )
 
-def process_deepsets(input_raw, output_dir, target_columns, label_key):
+def process_deepsets(input_raw, output_dir, label_key):
     p = Path(output_dir)
     p.mkdir(parents=True, exist_ok=True)
     output_file = p / "deepsets_dataset.h5"
     with h5py.File(input_raw, 'r') as f:
-        cart_ds = f['Cartesian_data']
-        icrs_ds = f['ICRS_data']
+        raw_data = f['Cartesian_data'][:, :, XYZ_COLUMNS]
         pid_reg_ds = f['pid'][:]
-        if target_columns == '3d_x_y_z':
-            raw_data = cart_ds[:,:,[0, 1, 2]]
-        elif target_columns == '3d_ra_dec_parallax':
-            raw_data = icrs_ds[:,:,[0, 1, -1]]
-        elif target_columns == '4d_x_y_z_vtotal':
-            raw_data = cart_ds[:,:,[0, 1, 2, -1]]
-        elif target_columns == '4d_ra_dec_parallax_vtotal':
-            raw_data = icrs_ds[:, :, [0, 1, -1]]   # (N, T, 3)
-            cart_last = cart_ds[:, :, -1]          # (N, T)
-            # extend to (N, T, 1)
-            cart_last = cart_last[..., np.newaxis]
-            # concatenate to (N, T, 4)
-            raw_data = np.concatenate([raw_data, cart_last], axis=-1)
-        elif target_columns == '6d_x_y_z_vx_vy_vz':
-            raw_data = cart_ds[:,:,[0, 1, 2, 3, 4, 5]]
-        elif target_columns == '6d_ra_dec_parallax_proper_motions':
-            last_col = icrs_ds.shape[2] - 1
-            tmp = icrs_ds[:, :, [0, 1, 3, 4, 5, last_col]]
-            raw_data = tmp[:, :, [0, 1, 5, 2, 3, 4]]
 
     with h5py.File(output_file, 'w') as out_f:
         out_f.create_dataset('raw_data', data=raw_data, compression="gzip")
         out_f.create_dataset(label_key, data=pid_reg_ds, compression="gzip")
     print(f"Created {output_file} with raw_data of {raw_data.shape} and pid_reg_ds of {pid_reg_ds.shape}")
+
+def standardize_target(y, split, output_dir):
+    """z-scores a real-stream target with the train split's mean/std, saved to
+    streams/target_stats.npz. The test split keeps the raw target: training never
+    reads it, and predictions are mapped back with these stats before scoring
+    (as sklearn's TransformedTargetRegressor does), so the shared test split
+    stays one raw copy."""
+    stats_file = Path(output_dir) / "streams" / TARGET_STATS_NPZ
+    if split == 'test':
+        return y
+    if split == 'train':
+        mean, std = float(np.mean(y)), float(np.std(y))
+        np.savez(stats_file, mean=mean, std=std)
+        print(f"Train target - Mean: {mean:.6f}, Std: {std:.6f} (saved to {stats_file})")
+    else:
+        if not stats_file.exists():
+            raise FileNotFoundError(f"Cannot find {stats_file}. Please process 'train' split first!")
+        stats = np.load(stats_file)
+        mean, std = float(stats['mean']), float(stats['std'])
+    return (y - mean) / std
+
+
+def standardize_input(x, split, output_dir):
+    """Normalizes a (n_clouds, n_particles, 3) x, y, z input array with the
+    train split's statistics (exp_paths.compute_input_stats), saved to
+    streams/input_stats.npz: all three divided by one shared length scale,
+    nothing subtracted. The statistics are dataset-wide, never per point
+    cloud, so each cloud keeps its overall size, shape and position (a proxy's
+    target is its size). Unlike the target, the test split is transformed too:
+    a model has to see test inputs on the scale it was trained on."""
+    stats_file = Path(output_dir) / "streams" / INPUT_STATS_NPZ
+    if split == 'train':
+        mean, std = compute_input_stats(x)
+        np.savez(stats_file, mean=mean, std=std)
+        print(f"Train inputs - Mean: {np.round(mean, 4)}, Std: {np.round(std, 4)} (saved to {stats_file})")
+    else:
+        if not stats_file.exists():
+            raise FileNotFoundError(f"Cannot find {stats_file}. Please process 'train' split first!")
+        mean, std = load_input_stats(stats_file)
+    return ((x - mean) / std).astype(x.dtype)
+
+
+def write_shared_test(eval_raw, output_dir):
+    """Writes the size-EVAL_DATASET_SIZE dataset's test split to
+    data/shared_test<N>/streams/test/, the copy this dataset's models are
+    scored on: inputs normalized with this dataset's own input stats, target raw
+    (predictions are mapped back to it), same split boundary as
+    process_omnilearned."""
+    with h5py.File(eval_raw, 'r') as f:
+        n_streams = int(f['pid'].shape[0])
+        if n_streams != EVAL_DATASET_SIZE:
+            raise ValueError(f"--shared_test_raw has {n_streams} streams, expected {EVAL_DATASET_SIZE}: {eval_raw}")
+        start = int(n_streams * 0.8)
+        data = f['Cartesian_data'][start:, :, XYZ_COLUMNS]
+        pid = f['pid'][start:]
+
+    mean, std = load_input_stats(Path(output_dir) / "streams" / INPUT_STATS_NPZ)
+    data = ((data - mean) / std).astype(data.dtype)
+
+    p = Path(output_dir) / shared_test_dirname() / "streams" / "test"
+    p.mkdir(parents=True, exist_ok=True)
+    with h5py.File(p / "test_streams.hdf5", 'w') as out_f:
+        out_f.create_dataset('data', data=data, compression="gzip")
+        out_f.create_dataset('pid', data=pid, compression="gzip")
+        out_f.create_dataset('original_idx', data=np.arange(start, n_streams))
+    np.save(p / "file_index", np.vstack((np.zeros(len(pid), dtype=int), np.arange(len(pid)))).T)
+    print(f"Created {p / 'test_streams.hdf5'}: shared test split, indices {start} to {n_streams - 1}")
+
 
 def process_omnilearned(input_raw, output_dir, target_columns):
 
@@ -109,14 +156,8 @@ def process_omnilearned(input_raw, output_dir, target_columns):
             p.mkdir(parents=True, exist_ok=True)
             output_filename = p / f"{name}_streams.hdf5"
             
-            if target_columns == "3d_x_y_z":
-                sub_data = cart_ds[start:end,:,[0, 1, 2]]
-                sub_pid_reg = pid_reg_ds[start:end]
-            elif target_columns == '4d_x_y_z_vtotal':
-                sub_data = cart_ds[start:end,:,[0, 1, 2, -1]]
-                sub_pid_reg = pid_reg_ds[start:end]
-            elif target_columns == '6d_x_y_z_vx_vy_vz':
-                sub_data = cart_ds[start:end,:,[0, 1, 2, 3, 4, 5]]
+            if target_columns in REAL_STREAM_COLUMNS:
+                sub_data = cart_ds[start:end, :, XYZ_COLUMNS]
                 sub_pid_reg = pid_reg_ds[start:end]
             elif target_columns == '3d_proxy_ellipsoid':
                 n_streams = end - start
@@ -477,6 +518,11 @@ def process_omnilearned(input_raw, output_dir, target_columns):
                 
                 # Store the z-scores
                 sub_pid_reg[:] = z_scores
+            if target_columns in REAL_STREAM_COLUMNS:
+                sub_pid_reg = standardize_target(sub_pid_reg, name, output_dir)
+            # After the branches above, which compute every proxy target from
+            # the raw coordinates.
+            sub_data = standardize_input(sub_data, name, output_dir)
             with h5py.File(output_filename, 'w') as out_f:
                 out_f.create_dataset('data', data=sub_data, compression="gzip")
                 out_f.create_dataset('pid', data=sub_pid_reg, compression="gzip")
@@ -515,10 +561,12 @@ if __name__ == "__main__":
     print(f"[*] Output directory: {output_dir}")
 
     if args.target_model == 'deepsets':
-        process_deepsets(args.input_raw, output_dir, args.target_columns, TASKS[args.task]["label_key"])
+        process_deepsets(args.input_raw, output_dir, TASKS[args.task]["label_key"])
     elif "omni" in args.target_model:
         process_omnilearned(args.input_raw, output_dir, args.target_columns)
-        
+        if args.shared_test_raw and args.target_columns in REAL_STREAM_COLUMNS:
+            write_shared_test(args.shared_test_raw, output_dir)
+
     end_time = time.time()
     total_duration = end_time - start_time
     formatted_time = str(datetime.timedelta(seconds=int(total_duration)))

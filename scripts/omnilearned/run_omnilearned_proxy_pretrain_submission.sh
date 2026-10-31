@@ -39,11 +39,9 @@ job_name="o_ppt${model_suffix}"
 
 run_dir="${repo_dir}/${target_column}_${dataset_size}/${model}"
 
-if [[ ! -d "${run_dir}/data/streams/train" ]]; then
-    echo "Error: no data at ${run_dir}/data/streams/train" >&2
-    echo "       Prepare/relocate this proxy's 1-target data first." >&2
-    exit 1
-fi
+# Refuse stale data before queueing (the runner checks again before training).
+source "${script_dir}/check_data.sh"
+require_proxy_data "${run_dir}/data" || exit 1
 
 # Look up feat_num / num_classes per proxy — every unified 1-target
 # proxy maps to num_classes=1. Keep this in sync if new proxies are added.

@@ -25,7 +25,7 @@
 #SBATCH --gpus-per-node=4
 #SBATCH --ntasks-per-node=1
 #SBATCH --cpus-per-task=32
-#SBATCH --time=03:00:00
+#SBATCH --time=05:00:00
 #SBATCH --array=0-2
 #SBATCH --output=logs/%x_%A_%a.out
 #SBATCH --error=logs/%x_%A_%a.err
@@ -60,6 +60,11 @@ if [[ -n "${SLURM_ARRAY_TASK_ID:-}" ]]; then
     mkdir -p "./run_${CURRENT_IDX}"
     cd "./run_${CURRENT_IDX}"
 fi
+
+# Refuse stale data (scripts/omnilearned/check_data.sh). The submitter checks
+# too, but this runner is also started directly, e.g. in a Jupyter session.
+source "${REPO_ROOT}/scripts/omnilearned/check_data.sh"
+require_downstream_data ../../data || exit 1
 
 NUM_FEAT=${1:?Error: need num_feat}
 TOTAL_EPOCHS=${2:?Error: need epoch_num}
@@ -202,6 +207,13 @@ python3 "${REPO_ROOT}/src/omnilearned_summary.py" \
     --json_path "./training_.json" \
     --npz_glob "./outputs__streams_*.npz" \
     --output_csv "./results/loss_history.csv" \
+    --target_stats ../../data/streams/target_stats.npz \
     || echo "Warning: results summary generation failed (non-fatal, training/eval already succeeded)" >&2
+
+echo "---------------------------------------"
+echo "[1x4 scratch] Shared-test evaluation and bootstrap"
+RUN_DIR="$(pwd)" FORCE=1 bash "${REPO_ROOT}/scripts/eval_shared_test10000.sh" \
+    && python3 "${REPO_ROOT}/src/compute_bootstrap_shared_test.py" --run_dir "$(pwd)" \
+    || echo "Warning: shared-test evaluation failed (non-fatal; rerun it with scripts/eval_shared_test10000.sh)" >&2
 
 echo "Run completed."

@@ -26,7 +26,7 @@ sys.path.insert(0, str(REPO_ROOT / "src"))
 from exp_paths import get_dataset_dir  # noqa: E402
 
 TARGET_COLUMNS = "3d_x_y_z"
-DATASET_SIZES = (300, 1000, 10000)
+DATASET_SIZES = (40, 100, 300, 1000)
 # OmniLearned model sizes to report. Only small has final runs so far.
 OMNILEARNED_SIZES = ("small",)
 

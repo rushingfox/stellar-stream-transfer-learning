@@ -1,5 +1,7 @@
 from pathlib import Path
 
+import numpy as np
+
 VALID_DATASET_SIZES = (20, 40, 100, 300, 1000, 10000)
 
 # Regression tasks. dir_prefix goes in front of the experiment folder name
@@ -21,9 +23,22 @@ PRETRAIN_COLUMN_PREFIXES = ("3d_proxy_", "3d_x_y_z_eigenvalues")
 # of this dataset size. Each run keeps everything from that evaluation in
 # run_<idx>/shared_test<N>/: the predictions (outputs__streams_0.npz for
 # OmniLearned, predictions.npz otherwise), loss_history.csv and bootstrap.csv.
+# OmniLearned reads that test split from its own size's data/shared_test<N>/,
+# a copy whose inputs are normalized with that size's input stats.
 EVAL_DATASET_SIZE = 10000
 SHARED_TEST_CSV = "loss_history.csv"
 BOOTSTRAP_CSV = "bootstrap.csv"
+
+# Inputs and targets are normalized with each dataset's own train split, never
+# with another dataset's. The inputs, x, y, z, are divided by one length scale,
+# the std of all train x, y and z values pooled together, and nothing is
+# subtracted: shapes stay undistorted and the origin stays where it is. Every
+# split, test included, is transformed (input_stats.npz in data/streams/ holds
+# a per-axis mean, all 0, and std, all that one scale). The downstream target
+# is z-scored in train and val only; test keeps the raw target, and predictions
+# are mapped back to it with target_stats.npz before scoring.
+INPUT_STATS_NPZ = "input_stats.npz"
+TARGET_STATS_NPZ = "target_stats.npz"
 
 
 def validate_dataset_size(dataset_size):
@@ -55,6 +70,34 @@ def get_dataset_dir(repo_root, target_columns, dataset_size, task=DEFAULT_TASK):
 
 def get_model_dir(repo_root, target_columns, dataset_size, target_model, task=DEFAULT_TASK):
     return get_dataset_dir(repo_root, target_columns, dataset_size, task) / target_model
+
+
+def get_target_stats_path(repo_root, target_columns, dataset_size, task=DEFAULT_TASK):
+    return get_dataset_dir(repo_root, target_columns, dataset_size, task) / "data" / "streams" / TARGET_STATS_NPZ
+
+
+def load_target_stats(path):
+    """(mean, std) of the train split's target, as prepare_data.py saved them."""
+    stats = np.load(path)
+    return float(stats["mean"]), float(stats["std"])
+
+
+def compute_input_stats(train_inputs):
+    """(mean, std) arrays, one entry per axis, for a train split of shape
+    (n_clouds, n_particles, 3) holding x, y, z; inputs are then normalized as
+    (x - mean) / std. The mean is 0 and every std is the same number: the std
+    of all x, y and z values pooled over every particle of every cloud."""
+    if train_inputs.shape[-1] != 3:
+        raise ValueError(f"Expected x, y, z inputs, got {train_inputs.shape[-1]} features")
+    scale = train_inputs.std(dtype=np.float64)
+    return np.zeros(3), np.full(3, scale)
+
+
+def load_input_stats(path):
+    """(mean, std) arrays, one entry per input feature, of the train split's
+    inputs, as prepare_data.py saved them."""
+    stats = np.load(path)
+    return stats["mean"], stats["std"]
 
 
 def get_data_dir(repo_root, target_columns, dataset_size, target_model, task=DEFAULT_TASK):

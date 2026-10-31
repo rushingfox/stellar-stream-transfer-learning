@@ -27,14 +27,9 @@ case "$variant" in
         exit 1
         ;;
 esac
-names_default=("${names_prefix}_3d_xyz" "${names_prefix}_3d_radec" "${names_prefix}_4d_xyz" "${names_prefix}_4d_radec" "${names_prefix}_6d_xyz" "${names_prefix}_6d_radec")
+names_default=("${names_prefix}_3d_xyz")
 target_columns_default=(
     "3d_x_y_z"
-    "3d_ra_dec_parallax"
-    "4d_x_y_z_vtotal"
-    "4d_ra_dec_parallax_vtotal"
-    "6d_x_y_z_vx_vy_vz"
-    "6d_ra_dec_parallax_proper_motions"
 )
 submit_idxs_default=(0)
 
@@ -50,6 +45,12 @@ if [[ -n "${TARGET_COLUMNS:-}" ]]; then
 else
     target_columns=("${target_columns_default[@]}")
 fi
+for col in "${target_columns[@]}"; do
+    if [[ "${col}" != "3d_x_y_z" ]]; then
+        echo "Error: TARGET_COLUMNS='${col}': the real-stream input is 3d_x_y_z only" >&2
+        exit 1
+    fi
+done
 
 if [[ -n "${SUBMIT_IDXS:-}" ]]; then
     read -r -a submit_idxs <<< "${SUBMIT_IDXS}"
@@ -89,12 +90,16 @@ if [[ -n "${SBATCH_QOS:-}" ]]; then
 fi
 sbatch_time="${SBATCH_TIME:-}"
 if [[ -z "$sbatch_time" ]]; then
+    # Sized for the default 100 epochs (the 10000 limit doubled from 50 epochs').
     case "${dataset_size}" in
-        100|300|1000)
+        40|100|300)
             sbatch_time="00:30:00"
             ;;
+        1000)
+            sbatch_time="01:00:00"
+            ;;
         10000)
-            sbatch_time="05:00:00"
+            sbatch_time="10:00:00"
             ;;
     esac
 fi

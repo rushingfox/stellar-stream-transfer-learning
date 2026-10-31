@@ -19,31 +19,39 @@ Usage:
     python compute_bootstrap_shared_test.py \
         --repo_root .. --target_columns 3d_x_y_z --dataset_size 100 \
         --target_model omnilearned_proxy_cube_finetune --run_idxs 0
+    python compute_bootstrap_shared_test.py --run_dir <run_<idx> dir>   # what the training runners call
 """
 import argparse
 import os
+import re
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
 from sklearn.metrics import mean_squared_error
 
 from bootstrap_uncertainty import bootstrap_mse
-from exp_paths import BOOTSTRAP_CSV, DEFAULT_TASK, SHARED_TEST_CSV, TASKS, get_run_dir, shared_test_dirname
+from exp_paths import (BOOTSTRAP_CSV, DEFAULT_TASK, SHARED_TEST_CSV, TARGET_STATS_NPZ, TASKS, get_run_dir,
+                       get_target_stats_path, load_target_stats, shared_test_dirname)
 
 
-def load_predictions(run_dir, eval_dataset_size):
-    """Returns (prediction, truth) 1-D arrays for the shared test split, or
-    None if this run has no shared-test predictions saved yet."""
+def load_predictions(run_dir, eval_dataset_size, target_stats_path):
+    """Returns (prediction, truth) 1-D arrays for the shared test split, both
+    in raw target units, or None if this run has no shared-test predictions
+    saved yet. OmniLearned predicts the target z-scored with its own size's
+    train stats (target_stats_path) and is mapped back here; predictions.npz
+    (DeepSets and the non-ML baselines) is raw already."""
     shared_dir = os.path.join(str(run_dir), shared_test_dirname(eval_dataset_size))
     omni_path = os.path.join(shared_dir, "outputs__streams_0.npz")
     generic_path = os.path.join(shared_dir, "predictions.npz")
     if os.path.exists(omni_path):
         d = np.load(omni_path)
-    elif os.path.exists(generic_path):
+        mean, std = load_target_stats(target_stats_path)
+        return d["prediction"].reshape(-1) * std + mean, d["pid"].reshape(-1)
+    if os.path.exists(generic_path):
         d = np.load(generic_path)
-    else:
-        return None
-    return d["prediction"].reshape(-1), d["pid"].reshape(-1)
+        return d["prediction"].reshape(-1), d["pid"].reshape(-1)
+    return None
 
 
 def best_val_row(shared_dir):
@@ -64,8 +72,12 @@ def parse_args():
     p.add_argument('--repo_root', type=str, default="..")
     p.add_argument('--target_columns', type=str, default="3d_x_y_z")
     p.add_argument('--task', type=str, choices=list(TASKS), default=DEFAULT_TASK)
-    p.add_argument('--dataset_size', type=int, required=True)
-    p.add_argument('--target_model', type=str, required=True)
+    p.add_argument('--dataset_size', type=int)
+    p.add_argument('--target_model', type=str)
+    p.add_argument('--run_dir', type=str, default=None,
+                    help="One <task>_<target_columns>_<size>/<model>/run_<idx> dir instead of "
+                         "--dataset_size/--target_model/--run_idxs; its target stats are read "
+                         "from ../../data/streams/.")
     p.add_argument('--run_idxs', nargs='+', type=int, default=[0],
                     help="Which run(s) to bootstrap (default: just run_0 -- bootstrap "
                          "fixes a single trained model, it's not a cross-seed statistic).")
@@ -79,9 +91,19 @@ def main():
     args = parse_args()
     eval_ds = args.eval_dataset_size
 
-    for idx in args.run_idxs:
-        run_dir = get_run_dir(args.repo_root, args.target_columns, args.dataset_size, args.target_model, idx, args.task)
-        loaded = load_predictions(run_dir, eval_ds)
+    if args.run_dir:
+        run_dir = Path(args.run_dir).resolve()
+        idx = int(re.fullmatch(r"run_(\d+)", run_dir.name).group(1))
+        runs = [(idx, run_dir, run_dir.parent.parent / "data" / "streams" / TARGET_STATS_NPZ)]
+    else:
+        if args.dataset_size is None or args.target_model is None:
+            raise SystemExit("Give --dataset_size and --target_model, or --run_dir")
+        stats_path = get_target_stats_path(args.repo_root, args.target_columns, args.dataset_size, args.task)
+        runs = [(idx, get_run_dir(args.repo_root, args.target_columns, args.dataset_size, args.target_model, idx, args.task),
+                 stats_path) for idx in args.run_idxs]
+
+    for idx, run_dir, stats_path in runs:
+        loaded = load_predictions(run_dir, eval_ds, stats_path)
         if loaded is None:
             print(f"[skip] no shared-test predictions for {run_dir}")
             continue

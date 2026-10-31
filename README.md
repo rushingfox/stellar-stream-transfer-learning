@@ -149,7 +149,7 @@ done
 - We would get the scatter across the three runs from training directly, but for the estimation of bootstrap uncertainty we need to calculate it for all the models by:
   ```
   cd /path/to/Stream_Transfer_Learning
-  bash scripts/compute_bootstrap_shared_test_all.sh
+  RUN_IDXS="0 1 2" bash scripts/compute_bootstrap_shared_test_all.sh
   ```
 
 ## Generation of the figures

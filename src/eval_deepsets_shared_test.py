@@ -1,9 +1,11 @@
 """Re-scores a trained DeepSets checkpoint against dataset_size=10000's
 test split instead of its own. Checkpoint selection is unchanged (still each
-run's own best-val epoch); features are normalized with the checkpoint's own
-train-split mean/std (not persisted anywhere, so recomputed here from
---dataset_size's own data) rather than the eval set's stats. Writes
-run_<idx>/shared_test<N>/loss_history.csv and predictions.npz.
+run's own best-val epoch). The model was trained on inputs and target
+normalized with its own training data's train-split statistics (not persisted
+anywhere, so recomputed here from --dataset_size's own data): the shared test
+inputs are normalized with those input stats, and the predictions mapped back
+to the raw target. Writes run_<idx>/shared_test<N>/loss_history.csv and
+predictions.npz (raw units).
 """
 import argparse
 import glob
@@ -14,6 +16,7 @@ import numpy as np
 import pandas as pd
 import torch
 
+from dataset import train_input_stats, train_target_stats
 from exp_paths import DEFAULT_TASK, TASKS, find_label_key, get_dataset_dir, get_run_dir, get_shared_test_dir, validate_dataset_size
 from model import DeepSetsRegressor
 
@@ -50,17 +53,6 @@ def shared_deepsets_h5(repo_root, target_columns, dataset_size, task):
     """<task>_<target_columns>_<size>/data/deepsets_dataset.h5 -- one copy per size,
     shared by every DeepSets width (like OmniLearned's data/streams/)."""
     return get_dataset_dir(repo_root, target_columns, dataset_size, task) / "data" / "deepsets_dataset.h5"
-
-
-def compute_train_stats(h5_path, input_dim):
-    """Reproduces StreamDataset's train-split mean/std (dataset.py) exactly."""
-    with h5py.File(h5_path, 'r') as f:
-        total = f[find_label_key(f)].shape[0]
-        train_split = int(total * 0.6)
-        train_raw = f['raw_data'][:train_split].reshape(-1, input_dim)
-    mean = train_raw.mean(axis=0)
-    std = train_raw.std(axis=0) + 1e-6
-    return mean, std
 
 
 def load_test_split(h5_path):
@@ -106,8 +98,10 @@ def main():
     ckpt_path = find_checkpoint(run_dir)
     best_epoch, best_val = read_own_best_val(run_dir)
 
-    mean, std = compute_train_stats(own_h5, args.input_dim)
+    target_mean, target_std = train_target_stats(own_h5)
+    input_mean, input_std = train_input_stats(own_h5)
     raw, y = load_test_split(eval_h5)
+    raw = (raw - input_mean) / input_std
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
     state_dict = torch.load(ckpt_path, map_location=device)
@@ -116,16 +110,12 @@ def main():
     model.load_state_dict(state_dict)
     model.eval()
 
-    mean_t = torch.tensor(mean, dtype=torch.float32)
-    std_t = torch.tensor(std, dtype=torch.float32)
-
     preds = []
     with torch.no_grad():
         for i in range(0, raw.shape[0], args.batch_size):
             xb = torch.tensor(raw[i:i + args.batch_size], dtype=torch.float32)
-            xb = (xb - mean_t) / std_t
             preds.append(model(xb.to(device)).view(-1).cpu())
-    preds = torch.cat(preds, dim=0).numpy()
+    preds = torch.cat(preds, dim=0).numpy() * target_std + target_mean
     y = y.reshape(-1)
     test_mse = float(np.mean((preds - y) ** 2))
 

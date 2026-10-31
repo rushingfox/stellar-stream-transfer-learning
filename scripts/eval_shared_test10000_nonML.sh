@@ -7,7 +7,7 @@
 #
 # Usage: bash scripts/eval_shared_test10000_nonML.sh
 #
-# Env overrides: TASK (default prog_mass), DATASET_SIZES (default "300 1000 10000"), EVAL_DATASET_SIZE (default 10000)
+# Env overrides: TASK (default prog_mass), DATASET_SIZES (default "40 100 300 1000"), EVAL_DATASET_SIZE (default 10000)
 
 set -euo pipefail
 
@@ -25,7 +25,7 @@ eval_dataset_size=${EVAL_DATASET_SIZE:-10000}
 if [[ -n "${DATASET_SIZES:-}" ]]; then
     read -r -a dataset_sizes <<< "${DATASET_SIZES}"
 else
-    dataset_sizes=(300 1000 10000)
+    dataset_sizes=(40 100 300 1000)
 fi
 
 for dataset_size in "${dataset_sizes[@]}"; do

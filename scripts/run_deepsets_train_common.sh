@@ -2,9 +2,11 @@
 
 set -euo pipefail
 
-DATA_IDX=${1:?Error: please provide index 0/1/2/3/4/5}
-if [[ ! "$DATA_IDX" =~ ^[0-5]$ ]]; then
-    echo "Error: DATA_IDX must be one of 0 1 2 3 4 5, got '$DATA_IDX'" >&2
+# Index into submit_training_variant.sh's TARGET_COLUMNS list; 3d_x_y_z is the
+# only input, so it is always 0.
+DATA_IDX=${1:?Error: please provide index 0}
+if [[ "$DATA_IDX" != "0" ]]; then
+    echo "Error: DATA_IDX must be 0 (3d_x_y_z), got '$DATA_IDX'" >&2
     exit 1
 fi
 
@@ -12,17 +14,21 @@ SLURM_ARRAY_TASK_ID=${SLURM_ARRAY_TASK_ID:-0}
 BASE_IDX=${BASE_IDX:-0}
 CURRENT_IDX=$((BASE_IDX + SLURM_ARRAY_TASK_ID))
 
-INPUT_DIMS=(3 3 4 4 6 6)
+INPUT_DIM=3  # x, y, z
 # Shared per-size dataset (<task>_<target_columns>_<size>/data/), relative to run_N/.
 H5_FILE=${H5_FILE:-../../data/deepsets_dataset.h5}
 # EPOCH_NUM is the name the OmniLearned submission scripts use; accept either.
-EPOCHS=${EPOCHS:-${EPOCH_NUM:-50}}
+EPOCHS=${EPOCHS:-${EPOCH_NUM:-100}}
 BATCH_SIZE=${BATCH_SIZE:-32}
 HIDDEN_DIM=${HIDDEN_DIM:-1024}
+# main.py's own default; set LR (with a matching MODEL_SUFFIX, e.g. _lr5e-4)
+# for an lr variant.
+LR=${LR:-1e-3}
 
 echo "Starting Array Task ID: ${SLURM_ARRAY_TASK_ID}"
 echo "Running experiment with run_idx: ${CURRENT_IDX}"
 echo "Using hidden_dim: ${HIDDEN_DIM}"
+echo "Using lr: ${LR}"
 
 # An existing checkpoint means this run_N already has results -- either a
 # finished run, or one that was cut off. Continuing it silently (the old
@@ -57,8 +63,14 @@ python ../../../src/main.py \
     --run_idx "$CURRENT_IDX" \
     --epochs "$EPOCHS" \
     --batch_size "$BATCH_SIZE" \
-    --input_dim "${INPUT_DIMS[$DATA_IDX]}" \
+    --input_dim "${INPUT_DIM}" \
     --hidden_dim "$HIDDEN_DIM" \
+    --lr "$LR" \
     $RESUME_FLAG
+
+echo "Shared-test evaluation and bootstrap"
+RUN_DIR="$(pwd)" FORCE=1 bash ../../../scripts/eval_shared_test10000.sh \
+    && python ../../../src/compute_bootstrap_shared_test.py --run_dir "$(pwd)" \
+    || echo "Warning: shared-test evaluation failed (non-fatal; rerun it with scripts/eval_shared_test10000.sh)" >&2
 
 echo "Job finished for run_${CURRENT_IDX} at $(date)"

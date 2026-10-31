@@ -17,6 +17,8 @@ from pathlib import Path
 import h5py
 import numpy as np
 
+from exp_paths import INPUT_STATS_NPZ
+
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
 SRC_ROOT = REPO_ROOT / "3d_proxy_ellipsoid_10000/omnilearned_proxy_pretrain/data/streams"
@@ -56,10 +58,16 @@ def slice_stats() -> None:
     # sigma_x is column 0 of the 3-D stats.
     np.savez(dst_stats, mean=old["mean"][:1], std=old["std"][:1])
     print(f"stats: mean={old['mean'][:1]}, std={old['std'][:1]} -> {dst_stats}")
+    # The point clouds are copied unchanged, so their input stats carry over as-is.
+    (DST_ROOT / INPUT_STATS_NPZ).write_bytes((SRC_ROOT / INPUT_STATS_NPZ).read_bytes())
 
 
 def main() -> None:
-    DST_ROOT.mkdir(parents=True, exist_ok=True)
+    # Never write over an existing output; input_stats.npz is copied last, so
+    # an interrupted run leaves data the training scripts refuse.
+    if DST_ROOT.exists():
+        raise SystemExit(f"{DST_ROOT} already exists -- delete it to regenerate.")
+    DST_ROOT.mkdir(parents=True)
     for split in ["train", "val", "test"]:
         slice_split(split)
     slice_stats()

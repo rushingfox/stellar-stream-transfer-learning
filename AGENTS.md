@@ -9,12 +9,13 @@ file documents architecture and conventions that the README does not spell out.
 Supervised regression of the **log progenitor mass** (`Log_Prog_Mass`) of synthetic
 stellar streams, used to compare **transfer-learning strategies** — physics-domain
 pretraining (jets, cosmology) and synthetic geometric-proxy pretraining — against
-from-scratch baselines, at three dataset sizes. Each stream is a point cloud of 4,000
+from-scratch baselines, at four dataset sizes. Each stream is a point cloud of 4,000
 particles in 3D Cartesian coordinates.
 
-Datasets are split train:val:test = 3:1:1, so the three sizes give **180 / 600 / 6,000**
-training streams. Every model is finally scored on one **shared 2,000-stream test set**
-taken from the 10,000-stream dataset, not on its own split.
+Datasets are split train:val:test = 3:1:1, so the four sizes (40, 100, 300 and 1,000
+streams) give **24 / 60 / 180 / 600** training streams. Every model is finally scored on
+one **shared 2,000-stream test set** taken from the 10,000-stream dataset, not on its own
+split.
 
 ## Infrastructure
 
@@ -43,6 +44,11 @@ taken from the 10,000-stream dataset, not on its own split.
   pass `--time` ≤ `00:30:00`, because the runner scripts' own `#SBATCH --time` headers
   default to much longer (e.g. `04:00:00`) and the job otherwise fails immediately with
   `QOSMaxWallDurationPerJobLimit`.
+- **JupyterHub sessions** are Slurm jobs too. An exclusive GPU node (`gpu_jupyter`
+  QOS, 4 A100s) lasts at most **6h** and only one can run per user at a time; a shared
+  GPU node (`gpu_shared_jupyter`, 1 GPU) can run alongside it. A 4-GPU OmniLearned run fits
+  in the exclusive one (see the interactive mode under Two model families), and the
+  single-process `eval_shared_test10000.sh` needs only the shared one.
 - `--qos=shared` GPU jobs occasionally fail with `srun: error: Unable to create step for
   job <id>: Error generating job credential` → infinite retry → wall-time kill. This is a
   NERSC scheduler flake, not a code bug. Resubmit only the stuck array indices via
@@ -50,33 +56,40 @@ taken from the 10,000-stream dataset, not on its own split.
 
 ## Folder convention
 
-Experiment results live at `<target_columns>_<dataset_size>/<model>/run_<seed_idx>/`.
+Experiment results live at `<task>_<target_columns>_<dataset_size>/<model>/run_<seed_idx>/`,
+e.g. `prog_mass_3d_x_y_z_300/omnilearned_scratch/run_0/`.
 
-- `dataset_size` ∈ `{300, 1000, 10000}` — the three sizes the paper reports, and the only
-  ones with tracked results. [src/exp_paths.py](src/exp_paths.py)'s
-  `VALID_DATASET_SIZES` also still accepts a couple of smaller exploratory sizes that are
-  not used anywhere; treat those as legacy.
-- `target_columns` for the real-stream task is `3d_x_y_z`. The proxy pretraining
-  datasets get their own top-level dirs (see below).
-- **Finetune data is shared per size**, in `<target_columns>_<size>/data/`: OmniLearned's
-  `data/streams/{train,val,test}/` (from
-  [scripts/prepare_data_omnilearned.sh](scripts/prepare_data_omnilearned.sh)) and
-  DeepSets' `data/baseline_dataset.h5` (from
-  [scripts/prepare_data_baseline.sh](scripts/prepare_data_baseline.sh)). Every model of a
-  family at that size reads the same copy; only the initial weights differ. The older
-  per-model `baseline/data/` and `baseline_256/data/` copies are byte-identical legacy and
-  no longer read.
+- `task` is `prog_mass` (the paper's progenitor-mass target) or `subhalo`, set with
+  `TASK` (default `prog_mass`, see [scripts/task_config.sh](scripts/task_config.sh)).
+- `dataset_size` ∈ `{40, 100, 300, 1000}` — the four sizes the paper reports. Size
+  10000 exists only for its data: its test split is the shared test set, and its train
+  split feeds the eigenvalue proxy. [src/exp_paths.py](src/exp_paths.py)'s
+  `VALID_DATASET_SIZES` also still accepts the unused exploratory size 20.
+- `target_columns` for the real-stream task is `3d_x_y_z`, the only input. The proxy
+  pretraining datasets get their own top-level dirs without a task prefix (see below).
+- **Finetune data is shared per size**, in `<task>_<target_columns>_<size>/data/`: OmniLearned's
+  `data/streams/{train,val,test}/` with `input_stats.npz` and `target_stats.npz`, plus
+  `data/shared_test10000/` (both from
+  [scripts/prepare_data_omnilearned.sh](scripts/prepare_data_omnilearned.sh); see
+  Normalization) and
+  DeepSets' `data/deepsets_dataset.h5` (from
+  [scripts/prepare_data_deepsets.sh](scripts/prepare_data_deepsets.sh)). Every model of a
+  family at that size reads the same copy; only the initial weights differ.
 - Path helpers in [src/exp_paths.py](src/exp_paths.py) (`dataset_key`,
   `get_loss_history_csv_path`, …) are the canonical way to construct paths — use them
   rather than f-strings.
-- `.gitignore` ignores the `3d_*/ 4d_*/ 6d_*/` result dirs wholesale and then
-  re-admits, by extension, only the small files the figures are rebuilt from
-  (`*.csv`, `*.npz`, `hparams.json`, and the pretrain `loss_curve.png` / `r2_curve.png`).
-  Read the comments in [.gitignore](.gitignore) before adding a rule — the directory
-  negations must come before the file ones or git will not even traverse into them.
+- `.gitignore` ignores every experiment folder (`3d_*/ prog_mass_*/ subhalo_*/`)
+  wholesale: data, checkpoints and per-run results are not tracked. They are
+  distributed as a separate archive with the same folder layout, to be unpacked at the
+  repo root.
 - Tracked top-level dirs: `src/`, `scripts/`, `evaluation/`, `visualization/`,
-  `proxy_gallery/`, plus the ten result dirs above. Raw data (`raw_data*/`) and all
-  model weights (`*.pt`, `*.pth`, `*.h5`) are **never** committed.
+  `proxy_gallery/`. Raw data (`raw_data*/`) and all
+  model weights (`*.pt`, `*.pth`, `*.h5`) are **never** committed. The one exception is
+  `raw_data/FIRE_LatteELVIS_SMHM`, the 5-line stellar-mass–halo-mass table that
+  [src/raw_data_generation.py](src/raw_data_generation.py) reads from its working
+  directory (`raw_data/`); it is the FIRE Latte/ELVIS fit in Fig. 2(a) of Sales,
+  Wetzel & Fattahi 2022 (arXiv:2206.05295). Since `raw_data*/` is ignored, it has to be
+  added with `git add -f`; once tracked, git follows it normally.
 
 ## The seven proxies
 
@@ -100,15 +113,17 @@ of them are synthesised with **3 targets** (`3d_proxy_box`, `3d_proxy_hard_ellip
 `3d_proxy_ellipsoid`), and three `src/make_*_from_*.py` slicers cut each down to its
 longest axis. The slicers infer the repo root from
 `Path(__file__).resolve().parent.parent` and read from
-`<parent>/omnilearned_proxy_pretrain_1x4/data/streams` — the `_1x4` suffix matters, it is
-where `prepare_data_proxy_pretrain.sh` actually writes.
+`<parent>/omnilearned_proxy_pretrain/data/streams`, where `prepare_data_proxy_pretrain.sh`
+writes.
 
 The eigen proxy is built separately, by
 [src/make_eigen_lambda_from_streams.py](src/make_eigen_lambda_from_streams.py)
 (`--index K`, K = 1, 2, 3 → `3d_x_y_z_eigenvalues_lambda{K}_10000`), directly from the
 shared N=10000 finetune data, so the finetune data has to exist first. `prepare_data.py`
-still has a 3-target `3d_x_y_z_eigenvalues` branch, but nothing uses it any more; the new
-script's K = 1 output is byte-identical to the λ₁ dataset the paper was trained on.
+still has a 3-target `3d_x_y_z_eigenvalues` branch, but nothing uses it any more. The
+script copies the finetune inputs as they are (already normalized with the N=10000 train
+split, which is the eigen proxy's own train split) and computes the √λ_K target, in kpc,
+from the **raw** coordinates in `raw_data/prog_mass_reg_dataset_10000.h5`.
 Note what that implies: the eigen proxy's inputs are
 the **same** 6,000 / 2,000 / 2,000 streams as the N=10000 finetune split, only relabelled.
 There is no test leakage (pretraining uses the train split only), but for the 6,000-stream
@@ -116,10 +131,11 @@ setting it is not independent data. λ₂ / λ₃ are whitelisted in the pretrai
 are not among the paper's seven.
 
 Each proxy z-scores its labels using **train-split statistics**, persisted to
-`streams/<synthesis_tag>_stats.npz` so val/test reuse the same scaler. The filename uses
-the **synthesis** tag, not the final 1-target name — e.g. `gaussian_ellipsoid_sigmax`
-inherits `ellipsoid_stats.npz`. `prepare_data.py` raises `FileNotFoundError` if the train
-split was not processed first.
+`streams/<synthesis_tag>_stats.npz` so val/test reuse the same scaler (the slicers also
+write the sliced stats under the final name, e.g. `gaussian_ellipsoid_sigmax_stats.npz`).
+Its inputs are normalized with its own train split as well (`streams/input_stats.npz`, see
+Normalization). `prepare_data.py` raises `FileNotFoundError` if the train split was not
+processed first.
 
 Rotation augmentation (a random 3D rotation inside the synthesis branch) is applied to
 `ellipsoid`, `cube`, `hard_ellipsoid` and `box`. It is **not** applied to `bounded_ball`
@@ -129,28 +145,83 @@ streams, already at arbitrary orientations).
 Proxy point clouds read `num_particles` from the raw HDF5 (4,000) rather than hardcoding
 it. Splits are `int(n*0.6)` / `int(n*0.8)`, i.e. 3:1:1.
 
+## Normalization
+
+Every model, OmniLearned and DeepSets alike, sees normalized inputs and a z-scored target,
+and every statistic comes from **the train split of the dataset being trained on** —
+each proxy its own, each downstream size its own. Val and test reuse the train numbers.
+
+- **Inputs**: every input is a point cloud of x, y, z coordinates (the only input
+  columns, `3d_x_y_z` for the real streams). They are divided by **one** length scale,
+  the std of all train x, y and z values pooled together (every particle of every train
+  point cloud), and nothing is subtracted. One shared scale keeps shapes undistorted (a
+  rotated box stays a box, which per-axis scales would shear), and not subtracting a mean
+  keeps the origin at the Galactic centre, which the OmniLearned `astro` features measure
+  angles from; the coordinate mean is near zero anyway. The statistics are dataset-wide,
+  never per point cloud, so a cloud keeps its overall size and position (a proxy's target
+  *is* its size). All splits are transformed, test included, because a model has to see
+  test inputs on the scale it was trained on. One function computes the statistics,
+  [src/exp_paths.py](src/exp_paths.py) `compute_input_stats`, which returns a per-axis
+  mean (all 0) and std (all that scale) applied as `(x - mean) / std`. OmniLearned data stores the
+  transformed inputs and the numbers in `data/streams/input_stats.npz`
+  ([src/prepare_data.py](src/prepare_data.py), `standardize_input`); DeepSets keeps raw
+  coordinates in `deepsets_dataset.h5` and applies the same transform on the fly
+  ([src/dataset.py](src/dataset.py), `train_input_stats`).
+- **Target**: the downstream target is z-scored in train and val
+  (`data/streams/target_stats.npz`); the test split keeps the raw target, and predictions
+  are mapped back with `pred * std + mean` before any loss or R² is computed, so every
+  reported number is in raw units. Proxy targets are z-scored in all three splits (see
+  The seven proxies).
+- **Shared test set**: one set of 2,000 test streams scores every size, but each size's
+  models must see its inputs transformed with that size's own input stats. So
+  [scripts/prepare_data_omnilearned.sh](scripts/prepare_data_omnilearned.sh) writes, for
+  every size, `data/shared_test10000/streams/test/`: the size-10000 test split with inputs
+  normalized with that size's stats and the target raw.
+  [scripts/eval_shared_test10000.sh](scripts/eval_shared_test10000.sh) scores each run on
+  its own size's copy, and DeepSets transforms the size-10000 `deepsets_dataset.h5` test
+  split on the fly.
+- The released jet and OmniCosmos checkpoints are used as they are; only our own proxy
+  pretraining follows the rules above.
+- The training-free baselines (mean prediction, eigenvalue regression) read raw data and
+  are unaffected.
+
 ## Two model families
 
 1. **In-house DeepSets baseline** ([src/main.py](src/main.py) + [src/model.py](src/model.py)
    + [src/dataset.py](src/dataset.py)): MLP encoder → mean+max+std pooling. Hidden dim is
-   set per variant: `baseline` = 128, `baseline_256` = 256 (the paper's "DeepSets"),
-   `baseline_1024` = 1024 (about OmniLearned-s size, for the architecture-vs-size
-   control). Submitted through
+   set per variant, in the model folder name: `deepsets` = 1024 (the paper's "DeepSets"),
+   `deepsets_256` = 256, `deepsets_128` = 128. Submitted through
+   `scripts/run_deepsets{,_256,_128}_submission.sh`, which call
    [scripts/submit_training_variant.sh](scripts/submit_training_variant.sh); `MODEL_SUFFIX`
-   is appended to the folder and job name. Runs on 1 GPU (`--qos=shared`). Two behaviours
-   to know:
+   is appended to the folder and job name, `LR` sets the learning rate (default 1e-3).
+   Runs on 1 GPU (`--qos=shared`). Three behaviours to know:
    - **No silent resume.** If `run_N/checkpoints/checkpoint_latest.pth` already exists,
-     [scripts/run_baseline_train_common.sh](scripts/run_baseline_train_common.sh) refuses
+     [scripts/run_deepsets_train_common.sh](scripts/run_deepsets_train_common.sh) refuses
      to start unless `RESUME=1` (continue it, e.g. after a timeout) or `FORCE=1` (delete
-     `run_N` and retrain). The epoch count comes from `EPOCHS` or `EPOCH_NUM`.
-   - [src/eval_baseline_shared_test.py](src/eval_baseline_shared_test.py) reads the
+     `run_N` and retrain). The epoch count comes from `EPOCHS` or `EPOCH_NUM` (default 100).
+   - [src/eval_deepsets_shared_test.py](src/eval_deepsets_shared_test.py) reads the
      hidden size from the checkpoint (`encoder.0.weight` is `[hidden, input_dim]`), not
      from the folder name.
+   - The DeepSets scripts take only `3d_x_y_z` (`TARGET_COLUMNS` anything else is an error).
 2. **OmniLearned transformer** (external CLI): every `omnilearned_*` and `omnicosmos_*`
-   model. All of these live in [scripts/stream_1x4/](scripts/stream_1x4/) and call
-   `srun omnilearned train …` on 1 node × 4 GPUs. Pretrain checkpoints come either from
-   the OmniLearned/OmniCosmos releases (placed in `omnicosmos_checkpoints/`, gitignored)
-   or from local proxy pretraining.
+   model. All of these live in [scripts/omnilearned/](scripts/omnilearned/) and launch
+   `torchrun --nproc_per_node=4 $(which omnilearned) train …` on 1 node × 4 GPUs.
+   Pretrain checkpoints come either from the OmniLearned/OmniCosmos releases (placed in
+   `omnicosmos_checkpoints/`, gitignored) or from local proxy pretraining. Both the
+   submitters and the runners source
+   [scripts/omnilearned/check_data.sh](scripts/omnilearned/check_data.sh) and refuse to
+   start unless the data is complete and in the normalized form (see Normalization), so a
+   missed regeneration step stops a job instead of training on stale data.
+
+   The launcher is `torchrun`, not `srun`, so every OmniLearned runner also runs outside
+   sbatch, e.g. in a JupyterHub exclusive 4-GPU session. The runners create and enter
+   `run_<idx>/` only when `SLURM_ARRAY_TASK_ID` is set; otherwise they train in the
+   current directory. For that interactive mode, skip the submission wrapper, `cd` into
+   the `run_<idx>/` yourself and call the runner with the same positional arguments the
+   wrapper would pass (by absolute path is fine; it finds the repo root via
+   `BASH_SOURCE`). The `#SBATCH --output` lines do not apply there, so nothing goes to
+   `logs/` unless you redirect it. Cancel any queued sbatch job for the same `run_<idx>`
+   first, or it will retrain over the result when it starts.
 
 Both families share the same per-run output convention: each `run_<idx>/` ends up with a
 `loss_history.csv` — written by [src/omnilearned_summary.py](src/omnilearned_summary.py)
@@ -162,40 +233,73 @@ matrices) was removed; do not reintroduce it.
 
 ## Model sizes
 
-| model | parameters |
-|---|---|
-| `baseline` (DeepSets, hidden 128) | 41,985 |
-| `baseline_256` (DeepSets, hidden 256) | 116,609 |
-| `baseline_1024` (DeepSets, hidden 1024) | 1,252,481 |
-| OmniLearned-s, every variant | 1,389,477 |
+| model | backbone | head | total |
+|---|---|---|---|
+| `baseline` (DeepSets, hidden 128) | 17,280 | 24,705 | 41,985 |
+| `baseline_256` (DeepSets, hidden 256) | 67,328 | 49,281 | 116,609 |
+| `baseline_1024` (DeepSets, hidden 1024) | 1,055,744 | 196,737 | 1,252,481 |
+| OmniLearned-s, every variant | 1,389,477 | 1,315,334 | 2,704,811 |
+| OmniLearned-m | 30,475,825 | 20,989,958 | 51,465,783 |
+
+Backbone is DeepSets' `encoder` / OmniLearned's `body`; head is DeepSets' `regressor` /
+OmniLearned's `classifier_head`. **Both parts are used for every prediction**: in
+regression mode OmniLearned computes `classifier(body(x))`, and its own training log
+prints the total (`Total params: 2.70M`). A count of `body` alone understates the model
+by half. The checkpoint's `ema_body` is a running average of `body`, not extra weights,
+and is never counted. Which column the paper reports as "model size" is not settled.
+`baseline_1024` is 46% of OmniLearned-s by total and 76% by backbone.
+
+[src/count_params.py](src/count_params.py) reproduces the table from the checkpoints
+(terminal only): it counts every `run_0` checkpoint of each family at the three sizes
+and warns if they disagree. It reports only the OmniLearned sizes listed in its
+`OMNILEARNED_SIZES`, currently just small; the medium row above was counted from a model
+built with the same settings, and matches the `Total params: 51.47M` that medium
+training logs print.
+`--inspect PATH [PATH]` lists every component of one or two checkpoint files.
 
 Every OmniLearned variant — from scratch, jet-pretrained, cosmology-pretrained,
-proxy-pretrained — shares the same backbone, so differences between them come only from
-initialisation. `baseline` and `baseline_256` are small sanity checks, **not**
-capacity-matched competitors; `baseline_1024` (90% of OmniLearned-s) is the one that is.
+proxy-pretrained — trains the same architecture, so differences between them come only
+from initialisation. `baseline` and `baseline_256` are small sanity checks, **not**
+capacity-matched competitors.
 
 DeepSets parameters are h² + 199h + 129 for 3 input features, which reproduces every
-DeepSets row. The OmniLearned count is from our trained stream checkpoints; the released
-jet-pretrained `best_model_pretrain_s.pt` has 1,494,320 because it still carries the jet
-task's input and output layers, which finetuning replaces.
+DeepSets row. The OmniLearned counts are from our trained stream checkpoints. The
+pretrain checkpoints differ, and finetuning loads every tensor whose name and shape
+match except the final `out.*` layer (513 weights), which is always re-initialised:
+
+- The seven proxies are trained on our streams' architecture, so they match exactly.
+- CAMELS / Quijote match except `out` (2 targets instead of 1).
+- The released jet `best_model_pretrain_s.pt` has a 1,494,320 backbone: it has 15 extra
+  jet-only modules (time, pid and extra-info embeddings, global interaction,
+  `MPFourier`), 4 input features instead of 3, and a 210-way `out`. Finetuning drops the
+  extra modules and re-initialises the three input weights whose shapes differ
+  (`embed.mlp.fc1.weight`, `embed.norm.weight`, `local_physics.mlp.fc1.weight`; their
+  biases still load).
+
+That leaves 99.98% of the stream model's parameters taken from the pretrain checkpoint
+for the proxies and OmniCosmos, and 99.90% for jets. Each finetune log lists what was
+skipped (`Skipping …`).
 
 ## Proxy pretrain → finetune wiring
 
 The most coupled piece in the repo:
 
-1. **Pretrain**: `TARGET_COLUMN=<proxy> bash scripts/stream_1x4/run_omnilearned_proxy_pretrain_1x4_submission.sh`
-   → `<proxy>_10000/omnilearned_proxy_pretrain_1x4/run_0/best_model_.pt`.
+1. **Pretrain**: `TARGET_COLUMN=<proxy> bash scripts/omnilearned/run_omnilearned_proxy_pretrain_submission.sh`
+   → `<proxy>_10000/omnilearned_proxy_pretrain/run_0/best_model_.pt`.
    The array is `0-0` on purpose — only `run_0`'s checkpoint is consumed downstream.
-2. **Finetune**: [scripts/stream_1x4/run_omnilearned_proxy_finetune_1x4_submission.sh](scripts/stream_1x4/run_omnilearned_proxy_finetune_1x4_submission.sh)
+2. **Finetune**: [scripts/omnilearned/run_omnilearned_proxy_finetune_submission.sh](scripts/omnilearned/run_omnilearned_proxy_finetune_submission.sh)
    takes `PROXY_DATASET` (short tag, e.g. `bounded_ball`) and `PRETRAIN_CKPT` (absolute
-   path), copies the checkpoint into the finetune `run_dir` as
-   `best_model_<pretrain_tag>.pt` (`PRETRAIN_TAG` defaults to `PROXY_DATASET`), then
-   `sbatch`es the runner, which calls `omnilearned train --fine-tune --pretrain-tag <tag>`.
+   path), copies the checkpoint into the finetune model folder
+   (`omnilearned_proxy_<tag>_finetune/`) as `best_model_<pretrain_tag>.pt`
+   (`PRETRAIN_TAG` defaults to `PROXY_DATASET`), then `sbatch`es the runner. The runner
+   copies that file into its `run_<idx>/` every time it starts, overwriting any older
+   copy, and calls `omnilearned train --fine-tune --pretrain-tag <tag>`. The OmniCosmos
+   finetunes use the same runner, with the checkpoint taken from `omnicosmos_checkpoints/`.
 3. Every omnilearned-family model at a given `(target_columns, dataset_size)` trains on
    **identical** real-stream data — only the initial checkpoint differs — so the data dir
-   is generated **once** into `<target_columns>_<size>/data/` by
+   is generated **once** into `<task>_<target_columns>_<size>/data/` by
    [scripts/prepare_data_omnilearned.sh](scripts/prepare_data_omnilearned.sh) and every
-   `_1x4` runner reads it via `--path ../../data`.
+   OmniLearned runner reads it via `--path ../../data`.
 
 **Adding a new proxy** touches: [src/prepare_data.py](src/prepare_data.py) (synthesis
 branch + argparse choices), [src/proxy_gallery.py](src/proxy_gallery.py) (visualisation +
@@ -217,21 +321,36 @@ Where a script's `sbatch` defaults live:
 
 | script | where the defaults are |
 |---|---|
-| `scripts/run_baseline{,_256,_1024}_submission.sh` | [scripts/submit_training_variant.sh](scripts/submit_training_variant.sh) |
-| everything under `scripts/stream_1x4/` | the wrapper script itself |
+| `scripts/run_deepsets{,_256,_128}_submission.sh` | [scripts/submit_training_variant.sh](scripts/submit_training_variant.sh) |
+| everything under `scripts/omnilearned/` | the wrapper script itself |
 
-The `stream_1x4/` wrappers interleave pre-submission logic (checkpoint copying,
+The `scripts/omnilearned/` wrappers interleave pre-submission logic (checkpoint copying,
 shared-data existence checks, per-size time estimates) with the `sbatch` call, so they
 cannot delegate to the shared helper. Override at call time with `SBATCH_QOS`,
 `SBATCH_TIME`, `SBATCH_ARRAY`, or edit the runner's own `#SBATCH` header for a permanent
 change. They resolve their sibling runner script via `BASH_SOURCE`, so they work from any
 working directory.
 
-For sizes 300 and 1000 these wrappers **auto-tighten `--time` to the 30-minute mark but
+Every OmniLearned training defaults to **100 epochs** (`EPOCH_NUM`; `TOTAL_EPOCHS` for
+the proxy pretrain). For the downstream sizes the wrappers **set `--time` per size but
 deliberately keep `--qos=regular`** — debug QOS caps concurrency at ~3 jobs per user,
-which is worse than waiting. Size 10000 keeps the runner's own `#SBATCH --time`:
-**3h** for scratch / jet-finetune / proxy-finetune / omnicosmos-finetune, **5h** for
-proxy pretrain.
+which is worse than waiting: 30 min for 40 and 100, 1h for 300, 1h30 for 1000. Any other
+size keeps the runner's own `#SBATCH --time` of **5h**, as does the proxy pretrain. The
+DeepSets wrapper sets 30 min for 40, 100 and 300, 1h for 1000 and 10h for 10000.
+
+Those limits include the shared-test evaluation each job runs at its end and were sized
+for 100 epochs; runtime grows linearly with `EPOCH_NUM`, so pass `SBATCH_TIME` explicitly
+for longer runs. Measured for 100 epochs of `MODEL_SIZE=small` on 4 GPUs: about 30 min of
+training at N=1000 and about 13 min at N=300, plus a few minutes of evaluation; a proxy
+pretrain takes about 3h50m. The per-size limits apply only to `MODEL_SIZE=small`; larger
+sizes keep the runner's own `--time`.
+
+`MODEL_SIZE=medium` is about 2–2.4× slower per epoch than small (about 5.5h per 50
+epochs at N=10000, so a run there does not fit a 6h Jupyter session) and **needs the
+80 GB A100 nodes**: on the 40 GB ones it runs out of GPU memory in the first epoch. Pass
+`SBATCH_CONSTRAINT="gpu&hbm80g"`, which sbatch reads in place of the runners'
+`--constraint=gpu`, and in a Jupyter session check
+`nvidia-smi --query-gpu=memory.total --format=csv` first.
 
 Useful patterns:
 
@@ -239,44 +358,70 @@ Useful patterns:
 - **Resubmit only failed array tasks**: `SBATCH_ARRAY="<idx[,idx...]>" bash <runner>` —
   the per-task dir is `run_$((BASE_IDX + SLURM_ARRAY_TASK_ID))`, so a resubmit overwrites
   in place (DeepSets needs `RESUME=1` or `FORCE=1` for that, see above).
-- **Run a variant without touching existing results**: every `stream_1x4/` scratch and
-  finetune submitter takes `MODEL_SUFFIX` (default `_1x4`) and `EPOCH_NUM` (default 50);
-  a new suffix puts the runs in a new sibling folder next to the existing one.
+- **Run a variant without touching existing results**: every `scripts/omnilearned/`
+  scratch and finetune submitter takes `MODEL_SUFFIX` (default empty) and `EPOCH_NUM`
+  (default 100); a suffix puts the runs in a new sibling folder next to the existing one.
+  The scratch learning-rate sweep uses this: `LR=1e-4 MODEL_SUFFIX=_lr1e-4` →
+  `omnilearned_scratch_lr1e-4`, the folder name the figure script expects.
+- **Model size**: the scratch and jet-finetune runners take `MODEL_SIZE` = `small`
+  (default) | `medium` | `large`, and the jet finetune picks the matching checkpoint
+  (`pretrain_s` / `_m` / `_l`). The submitters refuse a non-small size without an
+  explicit `MODEL_SUFFIX`, so it can never land in a small model's folder, e.g.
+  `MODEL_SUFFIX=_m` → `omnilearned_scratch_m`. The proxy and OmniCosmos runners stay small: their
+  pretrain checkpoints only exist in that size.
 
-Known flake: the jet-pretrained finetune lets OmniLearned download
-`best_model_pretrain_s.pt` into each `run_N` at start, and all four ranks download it at
-once. Occasionally one rank reads the half-written file and the job dies within about two
-minutes with `Cannot use weights_only=True with files saved in the legacy .tar format`.
-Resubmitting that index fixes it: the complete file is then already on disk and is not
-fetched again. Proxy and OmniCosmos finetunes are unaffected, because their submitters
-copy the checkpoint in before `sbatch`.
+Known flake: if `run_N` has no `best_model_pretrain_<s|m|l>.pt`, the jet-pretrained
+finetune lets OmniLearned download it, and all four ranks download it at once.
+Occasionally one rank reads the half-written file and the job dies within about two
+minutes (`Cannot use weights_only=True with files saved in the legacy .tar format`, or
+just a rank exiting with code 1). The runner now avoids this by copying
+`omnicosmos_checkpoints/best_model_pretrain_<s|m|l>.pt` into `run_N` first when that
+local copy exists, so keep it there. OmniLearned only downloads when the file is missing
+from `run_N`, so putting it in by hand also protects jobs that were submitted before
+this change (Slurm runs the copy of the script it stored at submission). Resubmitting a
+failed index also works, since the complete file is then already there. Proxy and
+OmniCosmos finetunes are unaffected, because their submitters copy the checkpoint in
+before `sbatch`.
 
 ## Evaluation flow
 
-1. Each `_1x4` runner already calls [src/omnilearned_summary.py](src/omnilearned_summary.py)
-   itself once training finishes, so `run_<idx>/results/loss_history.csv` exists without
-   any manual step. [scripts/omnilearned_summary.sh](scripts/omnilearned_summary.sh) is a
-   **backfill / regeneration** tool — use it for older runs, or to rebuild the per-run
-   plots after changing plotting code. It merges `training_.json` +
-   `outputs__streams_0.npz` into `results/loss_history.csv`.
-2. [scripts/eval_shared_test10000.sh](scripts/eval_shared_test10000.sh) re-evaluates every
-   checkpoint on the shared 2,000-stream test set (finetuning otherwise scores on each
-   run's own, smaller and noisier, split). It writes **`shared_test10000/`** — both
-   `loss_history.csv` and the per-stream predictions `outputs__streams_*.npz`.
+1. Each training job (every OmniLearned downstream runner and the DeepSets runner) does
+   all of its own evaluation when training finishes:
+   [src/omnilearned_summary.py](src/omnilearned_summary.py) (OmniLearned) or `main.py`
+   (DeepSets) writes `run_<idx>/results/loss_history.csv` on the run's own split; then
+   [scripts/eval_shared_test10000.sh](scripts/eval_shared_test10000.sh) (called with
+   `RUN_DIR=<run dir> FORCE=1`) scores the best-val checkpoint on the shared 2,000-stream
+   test set, and [src/compute_bootstrap_shared_test.py](src/compute_bootstrap_shared_test.py)
+   (`--run_dir`) adds the bootstrap error bar. Everything from the shared-test evaluation
+   lands in `run_<idx>/shared_test10000/`: the predictions (`outputs__streams_0.npz` for
+   OmniLearned, `predictions.npz` for DeepSets), `loss_history.csv` and `bootstrap.csv`.
+   A failure there is reported as a warning and does not fail the job.
+2. The manual scripts are for backfilling or redoing that step.
+   [scripts/eval_shared_test10000.sh](scripts/eval_shared_test10000.sh) takes
+   `TARGET_MODELS`, `RUN_IDXS` and `DATASET_SIZES` (default 40 100 300 1000), reads
+   `--size` from each run's `hparams.json`, refuses runs whose data is not in the
+   normalized form, and skips runs that already have a `shared_test10000/loss_history.csv`
+   unless `FORCE=1`.
    [scripts/eval_shared_test10000_nonML.sh](scripts/eval_shared_test10000_nonML.sh) does
-   the same for the two training-free baselines (mean prediction, eigenvalue regression).
-3. [scripts/compute_bootstrap_shared_test_all.sh](scripts/compute_bootstrap_shared_test_all.sh)
-   reads those `.npz` predictions and writes a **separate**
-   `shared_test10000_bootstrap/loss_history.csv` carrying the `Test_Loss_Bootstrap_Std`
-   column (1,000 resamples of the test set), for `run_0/1/2`.
-   Mind the two directories: step 2 produces `shared_test10000/`, step 3 produces
-   `shared_test10000_bootstrap/`, and **step 4 reads only the latter** — so skipping
-   step 3 makes the figure silently find nothing.
-   Its model list is hard-coded to the `_1x4` folders; for any other folder call
+   the shared-test evaluation of the two training-free baselines (mean prediction,
+   eigenvalue regression), which nothing does automatically.
+   [scripts/compute_bootstrap_shared_test_all.sh](scripts/compute_bootstrap_shared_test_all.sh)
+   computes `bootstrap.csv` for every model in its list, only `run_0` unless `RUN_IDXS` is
+   set (`RUN_IDXS="0 1 2"` for the figure's nested error bars); for any other folder call
    [src/compute_bootstrap_shared_test.py](src/compute_bootstrap_shared_test.py) directly
-   (`--target_model <folder> --run_idxs ...`). The resampling seed is fixed, so reruns
-   give identical numbers. `eval_shared_test10000.sh` itself takes `TARGET_MODELS`,
-   `RUN_IDXS` and `DATASET_SIZES`, and skips runs that are already evaluated.
+   (`--target_model <folder> --run_idxs ...` or `--run_dir <run dir>`). The resampling
+   seed is fixed, so reruns give identical numbers.
+   **Only evaluate runs that have finished training.** `eval_shared_test10000.sh` treats
+   any run with a `best_model_.pt` as trained, but that file appears at the first best
+   epoch, so a run still in progress gets scored on a half-trained model, and every later
+   call then skips it as already evaluated (`FORCE=1` redoes it).
+3. `bootstrap.csv` is a single row: `Test_Loss` and `Test_Loss_Bootstrap_Std` (1,000
+   resamples of the test set) are computed from the predictions, while `Epoch` and
+   `Val_Loss` are copied bit for bit from the one row of `shared_test10000/loss_history.csv`
+   that carries a `Test_Loss`, i.e. the best-val epoch at which `best_model_.pt` was saved.
+   So the `Best Val MSE` column of the step-4 CSV is the real validation loss on each run's
+   own split. **Step 4 reads only `bootstrap.csv`** (with the default `BOOTSTRAP=true`), so
+   a run without one is silently left out of the figure.
 4. [evaluation/results_3d_shared_test10000.sh](evaluation/results_3d_shared_test10000.sh)
    feeds a list of `target_columns:dataset_size:target_model[:display_name]` strings to
    [src/build_results_table.py](src/build_results_table.py), which finds the best-val
@@ -301,10 +446,32 @@ Defaults reproduce the paper with zero flags. Env-var toggles on
 | `METRIC` | `r2` | `mse` for the raw-loss view |
 | `NESTED_ERROR` | `true` | two error bars: outer = stat ⊕ syst, inner band = mean bootstrap std |
 | `BOOTSTRAP` | `true` | implied by `NESTED_ERROR` |
-| `R2_YMIN` | `0` | y-axis floor; a non-zero value adds a `_ymin08`-style filename suffix, so the zoomed figure never overwrites the main one |
+| `R2_YMIN` | `-0.3` | y-axis floor; any other value adds a `_ymin08`-style filename suffix, so the zoomed figure never overwrites the main one |
 | `LATEX_TABLE` | `true` | set `false` on a second pass that only changes the zoom — the table does not depend on the y-axis crop |
 
-Two conventions inside [src/build_results_table.py](src/build_results_table.py):
+Conventions inside [src/build_results_table.py](src/build_results_table.py):
+
+- **`--epochs` (default 100, the training default) is a cutoff on the `Epoch` column**:
+  rows above it are dropped before the best-val row is picked, and a run left with no
+  row disappears from the figure without a warning. The bootstrap CSVs carry the real
+  best-val epoch (see Evaluation flow, step 3), as does the full per-epoch
+  `shared_test10000/loss_history.csv` read with `BOOTSTRAP=false`. So for runs trained
+  longer than 100 epochs, pass `--epochs` at least `EPOCH_NUM`, or every run whose best
+  epoch is past 100 is dropped. The shell
+  script does not set it, so call `build_results_table.py` directly for those, and for
+  any one-off figure give `--output` / `--scatter_plot` / `--latex_table` paths outside
+  `evaluation/`.
+- Each category (baseline / physics / synthetic / eigen) has a fixed list of colors in
+  `_CATEGORY_STYLE`, handed out in rank order to the members present, and too many
+  members in one category raises `ValueError`. Because of that a model's color depends
+  on the figure (the MSE view adds `average` first and shifts every baseline color), so
+  colors must not be hard-coded per model. The optional models (DeepSets 1024,
+  OmniLearned-m, PCA λ₂ / λ₃) are the exception: they take a fixed shade of their base
+  model's color from `_OPTIONAL_MODEL_COLORS` and sit next to it in rank, while the
+  category swatches still go to the paper's models only. Adding an optional model
+  therefore never recolors anything, and every figure without one is byte-identical to
+  before. A new model needs a `_PRETTY_MODEL_NAMES` entry and a rank, plus either an
+  `_OPTIONAL_MODEL_COLORS` entry or another swatch.
 
 - `_PRETTY_MODEL_NAMES` affects **plot legends and the LaTeX table only**. The CSV
   `Model` column keeps the raw display names so it stays parseable by exact name.
@@ -315,7 +482,8 @@ Two conventions inside [src/build_results_table.py](src/build_results_table.py):
   spacing is deliberate and the styling exists to stop it being misread as a number line.
 
 `evaluation/reproduce_main_figure.ipynb` produces the same main figure, zoom figure and
-table **without any raw data** — it reads the tracked per-run CSVs and the sidecar
+table **without any raw data** — it reads the per-run CSVs in the result folders (from the
+result archive) and the sidecar
 `evaluation/prog_mass_labels_10000_test.npy` for `Var(y_test)`. The shell script instead
 needs `raw_data/prog_mass_reg_dataset_10000.h5`. Both paths must stay byte-identical in
 their outputs; if you change one, re-run the other and diff.

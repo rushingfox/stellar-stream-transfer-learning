@@ -14,6 +14,12 @@ shared-test evaluation and bootstrap; a missing file is an error, not a skipped 
 evaluation/<task>_labels_10000_test.npy. --compact prints only the summary, one line
 per model (N = training streams, 3/5 of SIZE; readable model names), with the same numbers;
 --sort_r2 then orders each N's lines by mean R2, highest first, instead of the command order.
+
+    python src/print_r2.py --table
+
+prints the appendix table in plain text instead, and takes no SIZE:MODEL: every model of
+the paper's figure and table (rows) at every size (columns), "R2 ± total", with * on the
+best mean of each column and † on the scratch lr chosen by validation loss.
 """
 import argparse
 import itertools
@@ -27,8 +33,11 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT / "src"))
 
 from build_results_table import (  # noqa: E402
+    SCRATCH_LR_PREFIX,
+    SCRATCH_MODEL,
     compute_test_label_variance_from_labels,
     load_one_run,
+    select_scratch_lr,
     summarize_model,
 )
 from exp_paths import (  # noqa: E402
@@ -80,17 +89,40 @@ _TASK_TARGETS = {
     "subhalo": "log10 M(<10 pc) of the subhalo that perturbed the stream",
 }
 # The scratch runner's defaults, shown so its rows compare with the lr/epoch variants.
-_SCRATCH_DEFAULT_LR, _SCRATCH_DEFAULT_EPOCHS = "5e-5", "50"
+_SCRATCH_DEFAULT_LR, _SCRATCH_DEFAULT_EPOCHS = "5e-5", "100"
+
+# --table: the rows and columns of the appendix table
+# (evaluation/results_3d_shared_test10000.sh), as (folder, name) in table order.
+_TABLE_SIZES = (40, 100, 300, 1000)
+_TABLE_SCRATCH_LRS = ("1e-4", "2e-4", "5e-4", "1e-3")
+_TABLE_MODELS = (
+    [("eigenvalue_regression", "Eigenvalue Regression"),
+     ("deepsets", "DeepSets"),
+     # Not a folder: per size, the scratch lr below with the lowest mean best-val loss.
+     (_VAL_SELECTED_ROW := "val_selected_scratch", "OmniLearned (Scratch, val-selected lr)"),
+     ("omnilearned_scratch", f"OmniLearned (Scratch, lr {_SCRATCH_DEFAULT_LR})")]
+    + [(f"omnilearned_scratch_lr{lr}", f"OmniLearned (Scratch, lr {lr})") for lr in _TABLE_SCRATCH_LRS]
+    + [("omnilearned_jet_finetune", "OmniLearned (HEP Jets)"),
+       ("omnicosmos_camels_finetune", "OmniCosmos-C"),
+       ("omnicosmos_quijote_finetune", "OmniCosmos-Q"),
+       ("omnilearned_proxy_cube_finetune", "Cube"),
+       ("omnilearned_proxy_bounded_ball_finetune", "Bounded Ball"),
+       ("omnilearned_proxy_gaussian_ball_finetune", "Gaussian Ball"),
+       ("omnilearned_proxy_box_a_finetune", "Box"),
+       ("omnilearned_proxy_bounded_ellipsoid_a_finetune", "Bounded Ellipsoid"),
+       ("omnilearned_proxy_gaussian_ellipsoid_sigmax_finetune", "Gaussian Ellipsoid"),
+       ("omnilearned_proxy_eigen_lambda1_finetune", "Real-Stream PCA")]
+)
 
 
 def display_name(folder):
-    """Readable name for a model folder, e.g. omnilearned_proxy_cube_generator_finetune
-    -> 'Cube [generator]', omnilearned_scratch_lr1e-4_ep50 -> 'OmniLearned (Scratch),
+    """Readable name for a model folder, e.g. omnilearned_proxy_cube_finetune
+    -> 'Cube', omnilearned_scratch_lr1e-4_ep50 -> 'OmniLearned (Scratch),
     lr 1e-4, 50 ep'."""
     base, lr, epochs = re.fullmatch(r"(.+?)(?:_lr([0-9.e-]+))?(?:_ep(\d+))?", folder).groups()
-    proxy = re.fullmatch(r"omnilearned_proxy_(.+?)(_generator)?_finetune", base)
+    proxy = re.fullmatch(r"omnilearned_proxy_(.+?)_finetune", base)
     if proxy and proxy.group(1) in _PROXY_NAMES:
-        name = f"{_PROXY_NAMES[proxy.group(1)]} [{'generator' if proxy.group(2) else 'supervised'}]"
+        name = _PROXY_NAMES[proxy.group(1)]
     elif base in _BASE_NAMES:
         name = _BASE_NAMES[base]
     else:
@@ -182,21 +214,65 @@ def report(target_columns, size, model, runs, var, task, compact_width=None):
           f"min {min(r2_values):.3f}   max {max(r2_values):.3f}   (n={len(runs)})")
 
 
+def print_table(target_columns, var, task):
+    """The appendix table in plain text: the same numbers, bold best -> *, dagger -> †."""
+    rows = []  # plot rows of summarize_model, named like the figure so select_scratch_lr applies
+    for size in _TABLE_SIZES:
+        for folder, _ in _TABLE_MODELS:
+            if folder == _VAL_SELECTED_ROW:
+                continue
+            plot_name = (SCRATCH_MODEL if folder == "omnilearned_scratch"
+                         else folder.replace("omnilearned_scratch_lr", SCRATCH_LR_PREFIX))
+            _, row = summarize_model(REPO_ROOT, target_columns, size, folder, [0, 1, 2], NO_EPOCH_CUTOFF,
+                                     display_name=plot_name,
+                                     test_csv_name=f"{shared_test_dirname()}/{BOOTSTRAP_CSV}",
+                                     error_column="Test_Loss_Bootstrap_Std", combine_errors=True, task=task)
+            if row is not None:
+                rows.append({**row, "folder": folder, "size": size,
+                             "r2": 1.0 - row["Mean Test MSE"] / var, "total": row["Std Test MSE"] / var})
+    selected, val_rows = select_scratch_lr(rows)
+    best = {size: max(r["r2"] for r in rows if r["size"] == size) for size in _TABLE_SIZES}
+    cell = {(r["folder"], r["size"]): f"{r['r2']:.3f} ± {r['total']:.3f}"
+            + ("*" if r["r2"] == best[r["size"]] else "")
+            + ("†" if selected.get(r["Dataset"]) == r["Model_Name"] else "")
+            for r in rows}
+    # The val-selected row repeats the chosen lr's numbers (copied rows keep their size/r2/total).
+    cell.update({(_VAL_SELECTED_ROW, r["size"]): f"{r['r2']:.3f} ± {r['total']:.3f}"
+                 + ("*" if r["r2"] == best[r["size"]] else "")
+                 for r in val_rows})
+
+    width = max(len(name) for _, name in _TABLE_MODELS)
+    print(f"task: {task} | R2 ± total on {shared_test_dirname()} | "
+          f"* best mean per column, † scratch lr with the lowest mean best-val loss")
+    print(f"{'model':<{width}}" + "".join(f"  {'N = ' + str(int(size * 0.6)):<15}" for size in _TABLE_SIZES))
+    for folder, name in _TABLE_MODELS:
+        print(f"{name:<{width}}" + "".join(f"  {cell.get((folder, size), '--'):<15}" for size in _TABLE_SIZES))
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("specs", nargs="+", metavar="SIZE:MODEL[:RUNS]")
+    parser.add_argument("specs", nargs="*", metavar="SIZE:MODEL[:RUNS]")
+    parser.add_argument("--table", action="store_true",
+                        help="Print the appendix table (all models x all sizes); takes no SIZE:MODEL")
     parser.add_argument("--target_columns", default="3d_x_y_z")
     parser.add_argument("--task", choices=list(TASKS), default=DEFAULT_TASK)
     parser.add_argument("--compact", action="store_true", help="One summary line per model")
     parser.add_argument("--sort_r2", action="store_true",
                         help="With --compact: order each N's lines by mean R2, highest first")
     args = parser.parse_args()
+    if args.table and (args.specs or args.compact or args.sort_r2):
+        parser.error("--table prints the whole table: it takes no SIZE:MODEL, --compact or --sort_r2")
+    if not args.table and not args.specs:
+        parser.error("give SIZE:MODEL[:RUNS] specs, or --table")
     if args.sort_r2 and not args.compact:
         parser.error("--sort_r2 needs --compact")
 
-    specs = [parse_spec(s) for s in args.specs]
     labels_npy = REPO_ROOT / "evaluation" / f"{args.task}_labels_{EVAL_DATASET_SIZE}_test.npy"
     var = compute_test_label_variance_from_labels(str(labels_npy))
+    if args.table:
+        print_table(args.target_columns, var, args.task)
+        return
+    specs = [parse_spec(s) for s in args.specs]
     if args.compact:
         width = max(len(display_name(model)) for _, model, _ in specs)
         rows = [(size, *report(args.target_columns, size, model, runs, var, args.task, compact_width=width))

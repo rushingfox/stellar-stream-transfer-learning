@@ -7,6 +7,8 @@ import pandas as pd
 import matplotlib.pyplot as plt
 from sklearn.metrics import mean_squared_error
 
+from exp_paths import load_target_stats
+
 def parse_args():
     parser = argparse.ArgumentParser(description="Export Train/Val/Test MSE to CSV and Plot Curves")
     parser.add_argument('--json_path', type=str, default="../training_.json")
@@ -17,6 +19,13 @@ def parse_args():
                              "matches are concatenated so Test MSE reflects the full "
                              "test set, not just rank 0's shard.")
     parser.add_argument('--output_csv', type=str, default="./loss_history.csv")
+    parser.add_argument('--target_stats', type=str, default=None,
+                        help="target_stats.npz of a downstream run's data (the train "
+                             "split's target mean/std). The model then predicts the "
+                             "z-scored target: predictions are mapped back to the raw "
+                             "target (the npz's pid stays raw) and the train/val losses "
+                             "multiplied by std^2, so every MSE in the csv is in raw "
+                             "units. Omit for proxy pretrains, whose csv stays z-scored.")
     parser.add_argument('--ref', action='append', default=[],
                         help="Reference horizontal line on the R^2 plot. "
                              "Format 'LABEL:VAL1,VAL2,...' (one value per target). "
@@ -255,6 +264,18 @@ def main():
         except Exception as e:
             print(f"JSON error: {e}")
 
+    target_mean, target_std = 0.0, 1.0
+    if args.target_stats:
+        target_mean, target_std = load_target_stats(args.target_stats)
+        print(f"Target stats: mean {target_mean:.6f}, std {target_std:.6f} (from {args.target_stats})")
+        # MSE of z-scored targets times std^2 is the MSE in raw units; the R^2
+        # columns above are ratios of two such MSEs and need nothing.
+        train_losses = [v * target_std ** 2 for v in train_losses]
+        val_losses = [v * target_std ** 2 for v in val_losses]
+        if train_ptt is not None:
+            train_ptt = train_ptt * target_std ** 2
+            val_ptt = val_ptt * target_std ** 2
+
     # --- 2. Calculate Test metric from NPZ file(s) ---
     # Glob-match every DDP rank's output file and concatenate — a single-GPU
     # run has exactly one match (rank 0); a 1x4/multinode run has one per rank,
@@ -270,7 +291,7 @@ def main():
                 d = np.load(f)
                 preds_list.append(d["prediction"])
                 targets_list.append(d["pid"])
-            predictions = np.concatenate(preds_list, axis=0)
+            predictions = np.concatenate(preds_list, axis=0) * target_std + target_mean
             targets = np.concatenate(targets_list, axis=0)
 
             if predictions.ndim == 1:

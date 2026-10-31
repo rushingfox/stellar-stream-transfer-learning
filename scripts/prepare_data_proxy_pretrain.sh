@@ -66,6 +66,9 @@ if [[ -n "${_script_dir}" && -f "${_script_dir}/../src/prepare_data.py" ]]; then
 elif [[ -n "${SLURM_SUBMIT_DIR:-}" && -f "${SLURM_SUBMIT_DIR}/../src/prepare_data.py" ]]; then
     script_dir="${SLURM_SUBMIT_DIR}"
     repo_dir="$(cd "${script_dir}/.." && pwd)"
+elif [[ -n "${SLURM_SUBMIT_DIR:-}" && -f "${SLURM_SUBMIT_DIR}/src/prepare_data.py" ]]; then
+    repo_dir="$(cd "${SLURM_SUBMIT_DIR}" && pwd)"
+    script_dir="${repo_dir}/scripts"
 else
     echo "ERROR: cannot locate repo_dir (src/prepare_data.py not found)" >&2
     exit 1
@@ -74,13 +77,27 @@ fi
 for dataset_size in "${dataset_sizes[@]}"; do
     input_raw="${repo_dir}/raw_data/${raw_data_prefix}_${dataset_size}.h5"
     for target_column in "${target_columns[@]}"; do
+        proxy_dir="${repo_dir}/${target_column}_${dataset_size}"
+        # Never write over existing data: a regeneration interrupted halfway
+        # would leave new and old splits side by side.
+        if [[ -e "${proxy_dir}/omnilearned_proxy_pretrain/data/streams" ]]; then
+            echo "Error: ${proxy_dir}/omnilearned_proxy_pretrain/data/streams already exists; delete it to regenerate" >&2
+            exit 1
+        fi
         echo "Preparing proxy pretrain data for ${target_column}, size=${dataset_size}"
+        # Written to a temporary folder and published with a single rename only
+        # once prepare_data.py has succeeded; a temporary folder left by an
+        # interrupted run is redone.
+        rm -rf "${proxy_dir}/_proxy_data_tmp"
         python "${repo_dir}/src/prepare_data.py" \
             --input_raw "${input_raw}" \
             --output_root "${repo_dir}" \
             --dataset_size "${dataset_size}" \
             --target_model "omnilearned" \
-            --output_model "omnilearned_proxy_pretrain" \
+            --output_model "_proxy_data_tmp" \
             --target_columns "${target_column}"
+        mkdir -p "${proxy_dir}/omnilearned_proxy_pretrain/data"
+        mv "${proxy_dir}/_proxy_data_tmp/data/streams" "${proxy_dir}/omnilearned_proxy_pretrain/data/"
+        rm -rf "${proxy_dir}/_proxy_data_tmp"
     done
 done

@@ -21,10 +21,10 @@ def parse_args():
     parser.add_argument('--batch_size', type=int, default=32, help="Batch size for training")
     parser.add_argument('--input_dim', type=int, default=3, help="Dimension of the input dataset")
     parser.add_argument('--lr', type=float, default=1e-3, help="Learning rate")
-    parser.add_argument('--epochs', type=int, default=50, help="Number of training epochs")
+    parser.add_argument('--epochs', type=int, default=100, help="Number of training epochs")
     parser.add_argument('--run_idx', type=int, default=0, help="The idx of the running; also decided the random seed for reproducibility")
     parser.add_argument('--num_workers', type=int, default=7, help="number of workers used in dataloader, should be lower than the number of cpus per task in sbatch script")
-    parser.add_argument('--hidden_dim', type=int, default=128, help="number of hidden dimension in our MLP model, 128 as default model, 256 is the large model")
+    parser.add_argument('--hidden_dim', type=int, default=1024, help="number of hidden dimension in our MLP model; 1024 is the default DeepSets, 256 and 128 the narrower ones")
     parser.add_argument('--resume', action='store_true', help="Resume training from checkpoints/checkpoint_latest.pth if it exists")
     return parser.parse_args()
 
@@ -44,7 +44,10 @@ def seed_worker(worker_id):
     np.random.seed(worker_seed)
     random.seed(worker_seed)
 
-def run_evaluation(model, loader, device, criterion):
+def run_evaluation(model, loader, device, criterion, target_mean, target_std):
+    """Predictions, targets and MSE in raw target units: the model predicts the
+    z-scored target, so predictions and targets are mapped back with the train
+    split's mean/std, and the z-scored MSE is multiplied by std^2."""
     model.eval()
     total_loss = 0
     total = 0
@@ -69,10 +72,10 @@ def run_evaluation(model, loader, device, criterion):
 
     avg_loss = total_loss / total
 
-    return (np.concatenate(all_preds),
-            np.concatenate(all_targets),
+    return (np.concatenate(all_preds) * target_std + target_mean,
+            np.concatenate(all_targets) * target_std + target_mean,
             np.concatenate(all_indices),
-            avg_loss)
+            avg_loss * target_std ** 2)
 
 if __name__ == "__main__":
     args = parse_args()
@@ -95,12 +98,13 @@ if __name__ == "__main__":
     print(f"Hyperparams: Seed={current_seed}, Input_Dim={INPUT_DIM}, Epochs={EPOCHS}")
 
     # --- Data Loading ---
-    train_dataset = StreamDataset(H5_FILE, INPUT_DIM, mode='train')
-    val_dataset = StreamDataset(H5_FILE, INPUT_DIM, mode='val')
-    test_dataset = StreamDataset(H5_FILE, INPUT_DIM, mode='test')
-
-    val_dataset.set_stats(train_dataset.mean, train_dataset.std)
-    test_dataset.set_stats(train_dataset.mean, train_dataset.std)
+    train_dataset = StreamDataset(H5_FILE, mode='train')
+    val_dataset = StreamDataset(H5_FILE, mode='val')
+    test_dataset = StreamDataset(H5_FILE, mode='test')
+    target_mean, target_std = train_dataset.target_mean, train_dataset.target_std
+    print(f"Target z-scored with the train split's mean {target_mean:.6f}, std {target_std:.6f}")
+    print(f"Inputs normalized as (x - mean) / std with the train split's mean {train_dataset.input_mean.numpy()}, "
+          f"std {train_dataset.input_std.numpy()}")
 
     g = torch.Generator()
     g.manual_seed(current_seed)
@@ -165,11 +169,11 @@ if __name__ == "__main__":
             total_train_loss += loss.item() * batch_labels.size(0)
             train_total += batch_labels.size(0)
 
-        avg_train_loss = total_train_loss / train_total
+        avg_train_loss = total_train_loss / train_total * target_std ** 2
 
-        # 2. Validation & Test Logging Phase
-        _, _, _, avg_val_loss = run_evaluation(model, val_loader, DEVICE, criterion)
-        _, _, _, avg_test_loss = run_evaluation(model, test_loader, DEVICE, criterion)
+        # 2. Validation & Test Logging Phase (all losses in raw target units)
+        _, _, _, avg_val_loss = run_evaluation(model, val_loader, DEVICE, criterion, target_mean, target_std)
+        _, _, _, avg_test_loss = run_evaluation(model, test_loader, DEVICE, criterion, target_mean, target_std)
 
         scheduler.step(avg_val_loss)
 
@@ -209,13 +213,13 @@ if __name__ == "__main__":
     print("="*40)
 
     print(f"Evaluation: Final Trained Model (Epoch {EPOCHS})")
-    l_preds, l_targets, l_ids, l_loss = run_evaluation(model, test_loader, DEVICE, criterion)
+    l_preds, l_targets, l_ids, l_loss = run_evaluation(model, test_loader, DEVICE, criterion, target_mean, target_std)
     plot_real_versus_predicted(l_targets, l_preds, l_ids, EPOCHS, f"./results/pred_vs_true_last_{EPOCHS}.png")
     pd.DataFrame({'ID': l_ids, 'True': l_targets, 'Pred': l_preds}).to_csv(f"results/test_last_epoch{args.epochs}.csv", index=False)
 
     print(f"Evaluation: Best Validated Model (from Epoch {best_epoch})")
     model.load_state_dict(torch.load(best_model_path, map_location=DEVICE))
-    b_preds, b_targets, b_ids, b_loss = run_evaluation(model, test_loader, DEVICE, criterion)
+    b_preds, b_targets, b_ids, b_loss = run_evaluation(model, test_loader, DEVICE, criterion, target_mean, target_std)
     plot_real_versus_predicted(b_targets, b_preds, b_ids, best_epoch, f"./results/pred_vs_true_best_{best_epoch}.png")
     pd.DataFrame({'ID': b_ids, 'True': b_targets, 'Pred': b_preds}).to_csv(f"results/test_best_epoch{best_epoch}.csv", index=False)
 

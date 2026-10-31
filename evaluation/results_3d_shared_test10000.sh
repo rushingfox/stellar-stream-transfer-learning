@@ -72,10 +72,9 @@ fi
 if [[ -n "${DATASET_SIZES:-}" ]]; then
     read -r -a agg_dataset_sizes <<< "${DATASET_SIZES}"
 else
-    # Paper only reports 300/1000/10000 -- 100 (and any smaller exploratory
-    # size) scatters too much to support a conclusion on its own, so it's
-    # opt-in via DATASET_SIZES rather than cluttering the default figure.
-    agg_dataset_sizes=(300 1000 10000)
+    # The four sizes of the 100-epoch suite (train splits 24/60/180/600);
+    # 10000 is opt-in via DATASET_SIZES.
+    agg_dataset_sizes=(40 100 300 1000)
 fi
 
 metric=${METRIC:-r2}
@@ -88,9 +87,18 @@ else
         models+=(
             "3d_x_y_z:${dataset_size}:omnicosmos_camels_finetune:OmniCosmos_CAMELS"
             "3d_x_y_z:${dataset_size}:omnicosmos_quijote_finetune:OmniCosmos_Quijote"
-            "3d_x_y_z:${dataset_size}:deepsets_256:DeepSets_256"
+            "3d_x_y_z:${dataset_size}:deepsets:DeepSets"
             "3d_x_y_z:${dataset_size}:eigenvalue_regression"
             "3d_x_y_z:${dataset_size}:omnilearned_scratch:OmniLearned_Scratch"
+        )
+        # Scratch lr sweep (the default lr is omnilearned_scratch above): every
+        # lr is a table row, and the figure shows one scratch point per size,
+        # for the lr with the lowest mean best-val loss. lr = 5e-3 diverges at
+        # every size and is left out.
+        for lr in 1e-4 2e-4 5e-4 1e-3; do
+            models+=("3d_x_y_z:${dataset_size}:omnilearned_scratch_lr${lr}:OmniLearned_Scratch_lr${lr}")
+        done
+        models+=(
             "3d_x_y_z:${dataset_size}:omnilearned_jet_finetune:OmniLearned_Finetune"
             "3d_x_y_z:${dataset_size}:omnilearned_proxy_cube_finetune:proxy_cube"
             "3d_x_y_z:${dataset_size}:omnilearned_proxy_bounded_ball_finetune:proxy_bounded_ball"
@@ -112,7 +120,10 @@ fi
 
 yscale=${YSCALE:-log}
 relative_to_scratch=${RELATIVE_TO_SCRATCH:-false}
-r2_ymin=${R2_YMIN:-0}
+# -0.3 keeps the models with a slightly negative R^2 at the smallest sizes
+# (DeepSets) on the plot.
+r2_ymin_default="-0.3"
+r2_ymin=${R2_YMIN:-${r2_ymin_default}}
 
 # Only the plot filename gets suffixed -- CSV content doesn't depend on
 # yscale/metric/relative_to_scratch/r2_ymin. r2 and relative_to_scratch both
@@ -121,8 +132,8 @@ r2_ymin=${R2_YMIN:-0}
 if [[ "${metric}" == "r2" ]]; then
     scale_suffix="_r2"
     # Only a non-default r2_ymin gets its own suffix, so the plain "_r2" name
-    # (ymin=0, the common case) is untouched -- e.g. R2_YMIN=0.7 -> "_ymin07".
-    [[ "${r2_ymin}" != "0" ]] && scale_suffix="${scale_suffix}_ymin${r2_ymin//./}"
+    # is the default figure -- e.g. R2_YMIN=0.8 -> "_ymin08", R2_YMIN=0 -> "_ymin0".
+    [[ "${r2_ymin}" != "${r2_ymin_default}" ]] && scale_suffix="${scale_suffix}_ymin${r2_ymin//./}"
 else
     scale_suffix=""
     [[ "${yscale}" == "linear" ]] && scale_suffix="_linear"
