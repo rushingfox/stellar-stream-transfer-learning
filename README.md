@@ -140,20 +140,18 @@ done
 
 #### Evaluation and non-DL baselines
 
-- The above fine-tuning by default would use the last 20% streams as test, so we need to manually switch the evaluation to the same 2000 streams.
-  ```
-  cd /path/to/Stream_Transfer_Learning
-  bash scripts/eval_shared_test10000.sh 
-  ```
+The DL models would evaluate their models on the shared test set just after the training automatically. So you just need to evaluate this for the non-DL baselines:
+
 - Two non-DL baselines with no training needed, can just evaluate: average (would not show up in R2 result figure since that would be just zero) + eigenvalue_regression
   ```
   cd /path/to/Stream_Transfer_Learning
   bash scripts/eval_shared_test10000_nonML.sh
-  ```
-- We would get the scatter across the three runs from training directly, but for the estimation of bootstrap uncertainty we need to calculate it for all the models by:
-  ```
-  cd /path/to/Stream_Transfer_Learning
-  RUN_IDXS="0 1 2" bash scripts/compute_bootstrap_shared_test_all.sh
+  mamba activate stream_transfer_learning
+  for s in 40 100 300 1000; do
+      for m in average eigenvalue_regression; do
+          python src/compute_bootstrap_shared_test.py --repo_root . --dataset_size "$s" --target_model "$m" --run_idxs 0
+      done
+  done
   ```
 
 ## Generation of the figures
