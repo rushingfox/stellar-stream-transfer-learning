@@ -26,8 +26,8 @@ SHARED_TEST_CSV = "loss_history.csv"
 BOOTSTRAP_CSV = "bootstrap.csv"
 
 # Inputs and targets are normalized with each dataset's own train split, never with another dataset's.
-# The inputs x, y, z are divided by one length scale, the std of all train x, y and z values pooled together, and nothing is subtracted, so shapes stay undistorted and the origin stays in place.
-# Every split, test included, is transformed; input_stats.npz in data/streams/ holds a per-axis mean (all 0) and std (all that one scale).
+# The inputs x, y, z are shifted by each axis's train mean and divided by one length scale shared by all three axes, so shapes stay undistorted.
+# Every split, test included, is transformed; input_stats.npz in data/streams/ holds the per-axis mean and std (all that one scale).
 # The downstream target is z-scored in train and val only; test keeps the raw target, and predictions are mapped back with target_stats.npz before scoring.
 INPUT_STATS_NPZ = "input_stats.npz"
 TARGET_STATS_NPZ = "target_stats.npz"
@@ -121,14 +121,15 @@ def load_target_stats(path):
 def compute_input_stats(train_inputs):
     """Computes the input normalization statistics of a train split.
 
-    Returns (mean, std) arrays with one entry per axis, applied as (x - mean) / std: the mean is 0 and every std is the same number, the std of all x, y and z values pooled over every particle of every cloud.
+    Returns (mean, std) arrays with one entry per axis, applied as (x - mean) / std: the mean is each axis's mean over every particle of every cloud, and every std is the same number, the std of all x, y and z values pooled after each axis is centred, i.e. the square root of the average of the three axis variances.
 
     `train_inputs`: the train split, of shape (n_clouds, n_particles, 3) holding x, y, z.
     """
     if train_inputs.shape[-1] != 3:
         raise ValueError(f"Expected x, y, z inputs, got {train_inputs.shape[-1]} features")
-    scale = train_inputs.std(dtype=np.float64)
-    return np.zeros(3), np.full(3, scale)
+    mean = train_inputs.mean(axis=(0, 1), dtype=np.float64)
+    scale = np.sqrt(train_inputs.var(axis=(0, 1), dtype=np.float64).mean())
+    return mean, np.full(3, scale)
 
 
 def load_input_stats(path):

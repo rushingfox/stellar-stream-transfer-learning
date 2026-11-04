@@ -23,7 +23,7 @@ def train_target_stats(h5_path):
 def train_input_stats(h5_path):
     """Computes the input statistics of the train split (the first 60%) with exp_paths.compute_input_stats.
 
-    Returns (mean, std), one entry per axis: the mean is 0 and every std is the one pooled length scale; the same numbers prepare_data.py saves for OmniLearned in data/streams/input_stats.npz (same raw coordinates, same split).
+    Returns (mean, std), one entry per axis: the mean is each axis's train mean and every std is the one shared length scale; the same numbers prepare_data.py saves for OmniLearned in data/streams/input_stats.npz (same raw coordinates, same split).
 
     `h5_path`: a deepsets_dataset.h5.
     """

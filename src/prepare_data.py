@@ -120,7 +120,7 @@ def standardize_input(x, split, output_dir):
 
     Returns the normalized array, in x's dtype.
 
-    All three axes are divided by one shared length scale, and nothing is subtracted.
+    Each axis is shifted by its own train mean, and all three are divided by one shared length scale.
     The statistics are dataset-wide, never per point cloud, so each cloud keeps its overall size, shape and position (a proxy's target is its size).
     Unlike the target, the test split is transformed too, because a model has to see test inputs on the scale it was trained on.
 

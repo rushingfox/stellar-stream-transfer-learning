@@ -151,17 +151,22 @@ and every statistic comes from **the train split of the dataset being trained on
 each proxy its own, each downstream size its own. Val and test reuse the train numbers.
 
 - **Inputs**: every input is a point cloud of x, y, z coordinates (the only input
-  columns, `3d_x_y_z` for the real streams). They are divided by **one** length scale,
-  the std of all train x, y and z values pooled together (every particle of every train
-  point cloud), and nothing is subtracted. One shared scale keeps shapes undistorted (a
-  rotated box stays a box, which per-axis scales would shear), and not subtracting a mean
-  keeps the origin at the Galactic centre, which the OmniLearned `astro` features measure
-  angles from; the coordinate mean is near zero anyway. The statistics are dataset-wide,
-  never per point cloud, so a cloud keeps its overall size and position (a proxy's target
-  *is* its size). All splits are transformed, test included, because a model has to see
-  test inputs on the scale it was trained on. One function computes the statistics,
-  [src/exp_paths.py](src/exp_paths.py) `compute_input_stats`, which returns a per-axis
-  mean (all 0) and std (all that scale) applied as `(x - mean) / std`. OmniLearned data stores the
+  columns, `3d_x_y_z` for the real streams). They are z-scored with **one** shared
+  scale: each axis is shifted by its own train mean (over every particle of every train
+  point cloud), and all three are divided by the std of the centred x, y and z values
+  pooled together, i.e. the square root of the average of the three axis variances. One
+  shared scale keeps shapes undistorted (a rotated box stays a box, which per-axis
+  scales would shear). The shift moves the origin off the Galactic centre, so the two
+  OmniLearned `astro` pair features that are angles seen from the origin (`get_dot`,
+  `get_dot_diff`) are measured from the train mean position instead; this was accepted
+  in exchange for a standard z-score (the pair distance `get_d3` is unaffected, and the
+  angles do not depend on the scale). The statistics are dataset-wide,
+  never per point cloud, so a cloud keeps its overall size and its position relative to
+  the others (a proxy's target *is* its size). All splits are transformed, test included,
+  because a model has to see test inputs on the scale it was trained on. One function
+  computes the statistics, [src/exp_paths.py](src/exp_paths.py) `compute_input_stats`,
+  which returns a per-axis mean and std (all that one scale) applied as
+  `(x - mean) / std`. OmniLearned data stores the
   transformed inputs and the numbers in `data/streams/input_stats.npz`
   ([src/prepare_data.py](src/prepare_data.py), `standardize_input`); DeepSets keeps raw
   coordinates in `deepsets_dataset.h5` and applies the same transform on the fly
