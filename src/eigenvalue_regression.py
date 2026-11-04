@@ -1,7 +1,8 @@
-"""eigenvalue_regression.py — classical regression baseline using PCA eigenvalues.
+"""Classical regression baseline using the PCA eigenvalues of each stream.
 
-Fits log10(M*) as a function of the three PCA eigenvalues (λ1 ≥ λ2 ≥ λ3) of each
-stream's spatial covariance matrix. Two feature variants:
+Fits the target (the raw file's pid, log10(M*) for prog_mass) as a function of the three eigenvalues (λ1 ≥ λ2 ≥ λ3) of each stream's spatial covariance matrix.
+The fit is least squares on the train split (with polynomial features if --degree > 1), and --variant auto keeps the variant with the lower val MSE.
+Two feature variants:
 
   linear   : features = [√λ1, √λ2, √λ3]  (linear in eigenvalue space)
   power_law: features = [log10(√λ1), log10(√λ2), log10(√λ3)]
@@ -10,8 +11,7 @@ stream's spatial covariance matrix. Two feature variants:
 Output:
   {output_dir}/results/loss_history.csv   (same format as run_average.py)
   {output_dir}/results/fit_summary.txt    (variant, formula, all MSEs)
-  with --eval_input_raw: the same two files plus predictions.npz in
-  {output_dir}/shared_test<eval_dataset_size>/ instead of results/
+  with --eval_input_raw: the same two files plus predictions.npz in {output_dir}/shared_test<eval_dataset_size>/ instead of results/
 
 Usage:
     python src/eigenvalue_regression.py \\
@@ -46,7 +46,12 @@ from sklearn.preprocessing import PolynomialFeatures
 # ---------------------------------------------------------------------------
 
 def _extract_sigmas(cart_ds: np.ndarray) -> np.ndarray:
-    """Return sqrt(eigenvalues) of covariance matrix for each stream → (N, 3)."""
+    """Computes √λ of each stream's covariance matrix (of the x, y, z of its particles).
+
+    Returns an (N, 3) array, largest first, in the coordinates' units (kpc).
+
+    `cart_ds`: the raw Cartesian_data, (N, n_particles, n_features) with x, y, z first.
+    """
     N = cart_ds.shape[0]
     sigmas = np.zeros((N, 3))
     for i in range(N):
@@ -66,6 +71,7 @@ def _extract_sigmas(cart_ds: np.ndarray) -> np.ndarray:
 # ---------------------------------------------------------------------------
 
 def _make_pipeline(degree: int) -> Pipeline:
+    """Linear regression, after PolynomialFeatures if degree > 1."""
     steps = []
     if degree > 1:
         steps.append(("poly", PolynomialFeatures(degree=degree, include_bias=False)))
@@ -75,7 +81,14 @@ def _make_pipeline(degree: int) -> Pipeline:
 
 def fit_variant(X_train, y_train, X_val, y_val, X_test, y_test,
                 degree: int, label: str):
-    """Fit and evaluate one variant. Returns (train_mse, val_mse, test_mse, coef, intercept, pipe)."""
+    """Fits one feature variant on the train split and scores it on all three splits.
+
+    Returns (train_mse, val_mse, test_mse, coef, intercept, pipe), the MSEs in raw target units; also prints them and, for degree 1, the fitted formula.
+
+    `X_train`, `y_train`, `X_val`, `y_val`, `X_test`, `y_test`: the features and targets of each split.
+    `degree`: the polynomial degree of the features (1 = plain linear).
+    `label`: 'linear' or 'power_law', for the printout.
+    """
     pipe = _make_pipeline(degree)
     pipe.fit(X_train, y_train)
 
@@ -89,7 +102,7 @@ def fit_variant(X_train, y_train, X_val, y_val, X_test, y_test,
     print(f"\n  [{label}]  train={train_mse:.6f}  val={val_mse:.6f}  test={test_mse:.6f}")
     if degree == 1:
         feat_names = (["log10(√λ1)", "log10(√λ2)", "log10(√λ3)"]
-                      if "log" in label else ["√λ1", "√λ2", "√λ3"])
+                      if label == "power_law" else ["√λ1", "√λ2", "√λ3"])
         terms = "  +  ".join(f"{c:.4f}·{n}" for c, n in zip(coef, feat_names))
         print(f"  formula: log10(M*) = {terms}  +  {intercept:.4f}")
 
@@ -97,6 +110,7 @@ def fit_variant(X_train, y_train, X_val, y_val, X_test, y_test,
 
 
 def _formula_str(variant: str, coef, intercept: float, degree: int) -> str:
+    """The fitted formula for fit_summary.txt, e.g. 'log10(M*) = a·√λ1 + b·√λ2 + c·√λ3 + d'; for degree > 1 only the degree and the intercept."""
     if degree > 1:
         return f"polynomial degree={degree}, intercept={intercept:.4f}"
     if variant == "power_law":
@@ -114,6 +128,10 @@ def _formula_str(variant: str, coef, intercept: float, degree: int) -> str:
 # ---------------------------------------------------------------------------
 
 def parse_args():
+    """Reads the input file, output folder, variant and shared-test options from the command line.
+
+    Returns the argparse namespace.
+    """
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--input_raw", required=True,
@@ -136,6 +154,10 @@ def parse_args():
 
 
 def main():
+    """Fits the baseline on --input_raw and writes its results.
+
+    Returns nothing; writes loss_history.csv and fit_summary.txt (plus predictions.npz with --eval_input_raw), see the module docstring.
+    """
     args = parse_args()
 
     h5_path = Path(args.input_raw)
@@ -146,7 +168,7 @@ def main():
     print(f"Loading {h5_path} ...")
     with h5py.File(h5_path, "r") as f:
         cart_ds = f["Cartesian_data"][:]
-        y       = f["pid"][:].ravel()    # log10(M*/M_sun)
+        y       = f["pid"][:].ravel()    # the target, log10(M*/M_sun) for prog_mass
 
     N = len(y)
     train_end = int(N * 0.6)
@@ -195,10 +217,8 @@ def main():
 
     train_mse, val_mse, test_mse, coef, intercept, pipe = best
 
-    # --- Optionally re-score the already-selected (best-val) variant against a
-    # shared/fixed test set instead of --input_raw's own. Model selection above
-    # (which variant, its coefficients) is unaffected -- only the reported test
-    # metric changes. ---
+    # --- Optional: score the already-selected (best-val) variant on a shared test set instead of --input_raw's own. ---
+    # The variant and its coefficients stay as fitted above; only the reported test MSE (and the average baseline's) changes.
     out_dir = Path(args.output_dir) / "results"
     if args.eval_input_raw:
         if args.eval_dataset_size is None:
@@ -236,8 +256,7 @@ def main():
     }).to_csv(out_dir / "loss_history.csv", index=False)
 
     if args.eval_input_raw:
-        # Per-sample predictions (same keys as OmniLearned's outputs__streams_*.npz)
-        # for matched/paired per-stream comparisons downstream.
+        # Per-stream predictions in raw units, under the same keys as OmniLearned's outputs__streams_*.npz (pid is the raw target), read downstream by compute_bootstrap_shared_test.py.
         np.savez(out_dir / "predictions.npz", prediction=eval_pred, pid=eval_y)
 
     formula = _formula_str(best_variant, coef, intercept, args.degree)

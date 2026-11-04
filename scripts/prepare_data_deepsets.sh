@@ -68,7 +68,7 @@ for tc in "${target_columns[@]}"; do
     fi
 done
 
-# Every DeepSets width (deepsets = 1024, deepsets_256, deepsets_128) trains on the
+# Every DeepSets run (each lr, each seed) trains on the
 # IDENTICAL data, so it is written ONCE per (target_columns, dataset_size) into
 # the shared "<task>_<target_columns>_<size>/data/" dir -- the same dir OmniLearned's
 # data/streams/ lives in -- and the runner reads it via ../../data from run_N/.

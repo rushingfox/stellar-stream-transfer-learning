@@ -1,14 +1,13 @@
-"""Print the parameter count of every model family, from the trained stream
-checkpoints, as backbone / head / total. Terminal only; writes nothing.
+"""Prints the parameter count of every model family from the trained stream checkpoints, as backbone / head / total.
+
+Terminal only; writes nothing.
 
     python src/count_params.py
     python src/count_params.py --inspect PATH [PATH]
 
-Every family is counted on all of its run_0 checkpoints across the three
-dataset sizes, with a warning if they do not all agree. Backbone is
-DeepSets' ``encoder`` / OmniLearned's ``body``; head is DeepSets' ``regressor``
-/ OmniLearned's ``classifier_head``. OmniLearned's ``ema_body`` (a running
-average of ``body``, not extra model weights) and optimizer state are left out.
+Every family is counted on all of its run_0 checkpoints across every size in DATASET_SIZES, with a warning if they do not all agree.
+Backbone is DeepSets' ``encoder`` / OmniLearned's ``body``; head is DeepSets' ``regressor`` / OmniLearned's ``classifier_head``.
+OmniLearned's ``ema_body`` (a running average of ``body``, not extra model weights) and optimizer state are left out.
 
 --inspect prints every component of one or two checkpoint files instead.
 """
@@ -27,20 +26,38 @@ from exp_paths import get_dataset_dir  # noqa: E402
 
 TARGET_COLUMNS = "3d_x_y_z"
 DATASET_SIZES = (40, 100, 300, 1000)
-# OmniLearned model sizes to report. Only small has final runs so far.
+# OmniLearned model sizes to report.
+# Only small has final runs so far.
 OMNILEARNED_SIZES = ("small",)
 
 
 def load(path):
+    """Loads a checkpoint file onto the CPU.
+
+    Returns what torch.load gives: a state_dict for DeepSets, a dict of components (body, classifier_head, ...) for OmniLearned.
+
+    `path`: the checkpoint file.
+    """
     return torch.load(path, map_location="cpu", weights_only=False)
 
 
 def n_params(state):
+    """Counts the parameters of a state_dict.
+
+    Returns the total number of elements of its tensors; non-tensor entries are skipped.
+
+    `state`: a {name: tensor} dict.
+    """
     return sum(v.numel() for v in state.values() if isinstance(v, torch.Tensor))
 
 
 def deepsets_counts(path):
-    """(family label, (backbone, head)) for a DeepSets best-model state_dict."""
+    """Counts the parameters of a DeepSets checkpoint.
+
+    Returns (family label, (backbone, head)): the label names the hidden width (read from encoder.0.weight), the backbone is ``encoder`` and the head is everything else (``regressor``).
+
+    `path`: a DeepSets best_model_epoch_*.pt state_dict.
+    """
     sd = load(path)
     hidden = sd["encoder.0.weight"].shape[0]
     backbone = n_params({k: v for k, v in sd.items() if k.startswith("encoder.")})
@@ -48,8 +65,12 @@ def deepsets_counts(path):
 
 
 def omnilearned_counts(path):
-    """(family label, (backbone, head)) for an OmniLearned best_model_.pt, or
-    None if its model size is not in OMNILEARNED_SIZES."""
+    """Counts the parameters of an OmniLearned checkpoint.
+
+    Returns (family label, (backbone, head)), backbone ``body`` and head ``classifier_head``; None if its model size, read from the run's hparams.json, is not in OMNILEARNED_SIZES.
+
+    `path`: a best_model_.pt, with its run's hparams.json next to it.
+    """
     hparams = json.loads((path.parent / "hparams.json").read_text())
     size = hparams["omnilearned_params"]["model_size"]["value"]
     if size not in OMNILEARNED_SIZES:
@@ -59,7 +80,10 @@ def omnilearned_counts(path):
 
 
 def discover():
-    """Yield (path, counter) for every run_0 checkpoint of a trained stream model."""
+    """Finds the run_0 checkpoint of every trained stream model (deepsets* and omni* folders) at each of DATASET_SIZES.
+
+    Yields (path, counter), with counter the function that counts that checkpoint (deepsets_counts or omnilearned_counts).
+    """
     for size in DATASET_SIZES:
         dataset_dir = get_dataset_dir(REPO_ROOT, TARGET_COLUMNS, size)
         for path in sorted(dataset_dir.glob("deepsets*/run_0/checkpoints/best_model_epoch_*.pt")):
@@ -69,6 +93,10 @@ def discover():
 
 
 def summarize():
+    """Prints the backbone / head / total table, one row per family (DeepSets first, then by total) and per distinct count.
+
+    Returns nothing; also prints a warning for every family whose checkpoints disagree, and the checkpoints it could not read.
+    """
     families = defaultdict(lambda: defaultdict(list))  # label -> (backbone, head) -> paths
     unreadable = []
     for path, counter in discover():
@@ -105,6 +133,12 @@ def summarize():
 
 
 def inspect(path):
+    """Prints every top-level entry of one checkpoint: the parameter count of a tensor or of a dict of tensors, the length of any other dict, and the value of anything else.
+
+    Returns nothing.
+
+    `path`: the checkpoint file.
+    """
     obj = load(path)
     print(f"=== {path} ===")
     if not isinstance(obj, dict):
@@ -123,6 +157,10 @@ def inspect(path):
 
 
 def main():
+    """Prints the parameter table, or with --inspect the components of one or two checkpoints.
+
+    Returns nothing.
+    """
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--inspect", nargs="+", metavar="PATH", type=Path,
                         help="print every component of 1 or 2 checkpoint files")

@@ -1,19 +1,7 @@
-"""Bootstrap error bar (OmniCosmos-style test-set resampling, see
-bootstrap_uncertainty.py) for a single fixed run's shared-test10000
-predictions, instead of the usual cross-seed std.
-
-For each of --run_idxs (default just run_0, since bootstrap fixes one
-trained model and resamples its test set -- it isn't a cross-seed
-statistic): loads that run's shared-test predictions (works for
-OmniLearned-family checkpoints and
-DeepSets/average/eigenvalue_regression alike), computes the actual MSE
-and resamples the (fixed) 2000 shared-test streams with replacement --n_boot
-times to get bootstrap_std.
-
-The output, run_<idx>/shared_test<N>/bootstrap.csv, is one row that also
-carries the run's best-val Epoch and Val_Loss, copied from the row of
-shared_test<N>/loss_history.csv that the shared-test evaluation scored, so
-every column of it means what its name says.
+"""Computes the bootstrap error bar of one run's shared-test predictions, as OmniCosmos does (literature/2512.24422.pdf, Sec. IV: "bootstrapping the test data 1000 times with replacement").
+For each run it loads the shared-test predictions (OmniLearned, DeepSets or a non-ML baseline), computes the MSE, and resamples the 2,000 shared-test streams with replacement --n_boot times; the std of those MSEs is the error bar.
+The trained model stays fixed, so this needs no retraining and is not a cross-seed statistic (--run_idxs defaults to run_0 alone).
+The output, run_<idx>/shared_test<N>/bootstrap.csv, is one row; its Epoch and Val_Loss are copied from the row of shared_test<N>/loss_history.csv that the shared-test evaluation scored, the run's best-val epoch.
 
 Usage:
     python compute_bootstrap_shared_test.py \
@@ -30,17 +18,37 @@ import numpy as np
 import pandas as pd
 from sklearn.metrics import mean_squared_error
 
-from bootstrap_uncertainty import bootstrap_mse
 from exp_paths import (BOOTSTRAP_CSV, DEFAULT_TASK, SHARED_TEST_CSV, TARGET_STATS_NPZ, TASKS, get_run_dir,
                        get_target_stats_path, load_target_stats, shared_test_dirname)
 
 
+def bootstrap_mse(predictions, targets, n_boot, seed):
+    """Resamples the test samples with replacement n_boot times and computes the MSE of each resample.
+
+    Returns an array of n_boot MSEs, computed like omnilearned_summary.py's Test MSE (mean_squared_error on flattened arrays) so the two compare.
+
+    `predictions`, `targets`: arrays with one row per test sample, in the same units.
+    `n_boot`: the number of resamples.
+    `seed`: the RNG seed.
+    """
+    rng = np.random.default_rng(seed)
+    n_test = predictions.shape[0]
+    boot_mses = np.empty(n_boot)
+    for b in range(n_boot):
+        idx = rng.integers(0, n_test, size=n_test)
+        boot_mses[b] = mean_squared_error(targets[idx].flatten(), predictions[idx].flatten())
+    return boot_mses
+
+
 def load_predictions(run_dir, eval_dataset_size, target_stats_path):
-    """Returns (prediction, truth) 1-D arrays for the shared test split, both
-    in raw target units, or None if this run has no shared-test predictions
-    saved yet. OmniLearned predicts the target z-scored with its own size's
-    train stats (target_stats_path) and is mapped back here; predictions.npz
-    (DeepSets and the non-ML baselines) is raw already."""
+    """Loads one run's shared-test predictions and true targets.
+
+    Returns (prediction, truth), 1-D arrays in raw target units, or None if the run has no shared-test predictions yet.
+
+    `run_dir`: the run_<idx> dir.
+    `eval_dataset_size`: the size whose test split is the shared test set (10000).
+    `target_stats_path`: the run's own size's target_stats.npz; OmniLearned predicts the z-scored target and is mapped back with it, while predictions.npz (DeepSets and the non-ML baselines) is raw already.
+    """
     shared_dir = os.path.join(str(run_dir), shared_test_dirname(eval_dataset_size))
     omni_path = os.path.join(shared_dir, "outputs__streams_0.npz")
     generic_path = os.path.join(shared_dir, "predictions.npz")
@@ -55,11 +63,14 @@ def load_predictions(run_dir, eval_dataset_size, target_stats_path):
 
 
 def best_val_row(shared_dir):
-    """(Epoch, Val_Loss) of the best-val row that the shared-test evaluation
-    scored: the only row of shared_test<N>/loss_history.csv with a Test_Loss."""
+    """Reads the best-val epoch that the shared-test evaluation scored.
+
+    Returns (Epoch, Val_Loss) of the only row of shared_test<N>/loss_history.csv that has a Test_Loss; raises ValueError otherwise.
+
+    `shared_dir`: the run's shared_test<N> dir, as a Path.
+    """
     csv_path = shared_dir / SHARED_TEST_CSV
-    # utf-8-sig strips the BOM that OmniLearned CSVs start with; round_trip
-    # parses the floats exactly, so the copied Val_Loss matches bit for bit.
+    # utf-8-sig strips the BOM that OmniLearned CSVs start with; round_trip parses the floats exactly, so the copied Val_Loss matches bit for bit.
     df = pd.read_csv(csv_path, encoding="utf-8-sig", float_precision="round_trip")
     scored = df[df["Test_Loss"].notna()]
     if len(scored) != 1:
@@ -68,6 +79,10 @@ def best_val_row(shared_dir):
 
 
 def parse_args():
+    """Parses the command line (see the module docstring).
+
+    Returns the argparse namespace.
+    """
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument('--repo_root', type=str, default="..")
     p.add_argument('--target_columns', type=str, default="3d_x_y_z")
@@ -88,6 +103,10 @@ def parse_args():
 
 
 def main():
+    """Writes bootstrap.csv for every requested run.
+
+    Returns nothing; runs without shared-test predictions are skipped.
+    """
     args = parse_args()
     eval_ds = args.eval_dataset_size
 

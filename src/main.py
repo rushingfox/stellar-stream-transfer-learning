@@ -2,9 +2,8 @@ import torch
 from torchinfo import summary
 import torch.nn as nn
 import torch.optim as optim
-from torch.utils.data import Dataset, DataLoader
+from torch.utils.data import DataLoader
 
-import h5py
 import numpy as np
 import pandas as pd
 import os
@@ -16,6 +15,10 @@ from model import DeepSetsRegressor
 from plot import plot_loss_curve, plot_test_loss_curve, plot_real_versus_predicted
 
 def parse_args():
+    """Reads the DeepSets training options from the command line.
+
+    Returns the argparse namespace.
+    """
     parser = argparse.ArgumentParser(description="Training script for DeepSets Regressor")
     parser.add_argument('--h5_file', type=str, default="../../data/deepsets_dataset.h5", help="Path to the dataset")
     parser.add_argument('--batch_size', type=int, default=32, help="Batch size for training")
@@ -24,11 +27,17 @@ def parse_args():
     parser.add_argument('--epochs', type=int, default=100, help="Number of training epochs")
     parser.add_argument('--run_idx', type=int, default=0, help="The idx of the running; also decided the random seed for reproducibility")
     parser.add_argument('--num_workers', type=int, default=7, help="number of workers used in dataloader, should be lower than the number of cpus per task in sbatch script")
-    parser.add_argument('--hidden_dim', type=int, default=1024, help="number of hidden dimension in our MLP model; 1024 is the default DeepSets, 256 and 128 the narrower ones")
+    parser.add_argument('--hidden_dim', type=int, default=1024, help="hidden width of the DeepSets MLP; 1024 is the default")
     parser.add_argument('--resume', action='store_true', help="Resume training from checkpoints/checkpoint_latest.pth if it exists")
     return parser.parse_args()
 
 def set_random_seed(seed):
+    """Seeds random, numpy and torch, and makes cuDNN deterministic, so a run is reproducible.
+
+    Returns nothing; a negative seed leaves everything unseeded.
+
+    `seed`: the seed, 42 + run_idx in this script.
+    """
     if seed >= 0:
         random.seed(seed)
         np.random.seed(seed)
@@ -40,14 +49,27 @@ def set_random_seed(seed):
             torch.backends.cudnn.benchmark = False
 
 def seed_worker(worker_id):
+    """DataLoader worker_init_fn: seeds numpy and random in each worker from torch's per-worker seed.
+
+    Returns nothing.
+
+    `worker_id`: the worker index DataLoader passes; unused, since torch.initial_seed() already differs per worker.
+    """
     worker_seed = torch.initial_seed() % 2**32
     np.random.seed(worker_seed)
     random.seed(worker_seed)
 
 def run_evaluation(model, loader, device, criterion, target_mean, target_std):
-    """Predictions, targets and MSE in raw target units: the model predicts the
-    z-scored target, so predictions and targets are mapped back with the train
-    split's mean/std, and the z-scored MSE is multiplied by std^2."""
+    """Runs the model over one split and maps everything back to raw target units.
+
+    Returns (predictions, targets, stream indices, MSE); the model predicts the z-scored target, so predictions and targets become pred * std + mean and the z-scored MSE is multiplied by std^2.
+
+    `model`: the DeepSetsRegressor.
+    `loader`: the DataLoader of the split, yielding (inputs, z-scored targets, stream indices).
+    `device`: 'cuda' or 'cpu'.
+    `criterion`: the loss, nn.MSELoss.
+    `target_mean`, `target_std`: the train split's target statistics the targets were z-scored with.
+    """
     model.eval()
     total_loss = 0
     total = 0
@@ -169,9 +191,10 @@ if __name__ == "__main__":
             total_train_loss += loss.item() * batch_labels.size(0)
             train_total += batch_labels.size(0)
 
+        # The z-scored MSE times std^2 is the MSE in raw target units.
         avg_train_loss = total_train_loss / train_total * target_std ** 2
 
-        # 2. Validation & Test Logging Phase (all losses in raw target units)
+        # 2. Validation and test losses, logged every epoch, in raw target units.
         _, _, _, avg_val_loss = run_evaluation(model, val_loader, DEVICE, criterion, target_mean, target_std)
         _, _, _, avg_test_loss = run_evaluation(model, test_loader, DEVICE, criterion, target_mean, target_std)
 
@@ -189,7 +212,7 @@ if __name__ == "__main__":
         val_loss_history.append(avg_val_loss)
         test_loss_history.append(avg_test_loss)
 
-        # Save latest checkpoint for resuming
+        # Latest checkpoint, for --resume.
         torch.save({
             'epoch': epoch,
             'model_state_dict': model.state_dict(),

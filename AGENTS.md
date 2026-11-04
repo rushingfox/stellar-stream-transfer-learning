@@ -119,8 +119,7 @@ writes.
 The eigen proxy is built separately, by
 [src/make_eigen_lambda_from_streams.py](src/make_eigen_lambda_from_streams.py)
 (`--index K`, K = 1, 2, 3 → `3d_x_y_z_eigenvalues_lambda{K}_10000`), directly from the
-shared N=10000 finetune data, so the finetune data has to exist first. `prepare_data.py`
-still has a 3-target `3d_x_y_z_eigenvalues` branch, but nothing uses it any more. The
+shared N=10000 finetune data, so the finetune data has to exist first. The
 script copies the finetune inputs as they are (already normalized with the N=10000 train
 split, which is the eigen proxy's own train split) and computes the √λ_K target, in kpc,
 from the **raw** coordinates in `raw_data/prog_mass_reg_dataset_10000.h5`.
@@ -188,10 +187,9 @@ each proxy its own, each downstream size its own. Val and test reuse the train n
 ## Two model families
 
 1. **In-house DeepSets baseline** ([src/main.py](src/main.py) + [src/model.py](src/model.py)
-   + [src/dataset.py](src/dataset.py)): MLP encoder → mean+max+std pooling. Hidden dim is
-   set per variant, in the model folder name: `deepsets` = 1024 (the paper's "DeepSets"),
-   `deepsets_256` = 256, `deepsets_128` = 128. Submitted through
-   `scripts/run_deepsets{,_256,_128}_submission.sh`, which call
+   + [src/dataset.py](src/dataset.py)): MLP encoder → mean+max+std pooling, hidden dim
+   1024, in the `deepsets` model folder. Submitted through
+   `scripts/run_deepsets_submission.sh`, which calls
    [scripts/submit_training_variant.sh](scripts/submit_training_variant.sh); `MODEL_SUFFIX`
    is appended to the folder and job name, `LR` sets the learning rate (default 1e-3).
    Runs on 1 GPU (`--qos=shared`). Three behaviours to know:
@@ -235,9 +233,7 @@ matrices) was removed; do not reintroduce it.
 
 | model | backbone | head | total |
 |---|---|---|---|
-| `baseline` (DeepSets, hidden 128) | 17,280 | 24,705 | 41,985 |
-| `baseline_256` (DeepSets, hidden 256) | 67,328 | 49,281 | 116,609 |
-| `baseline_1024` (DeepSets, hidden 1024) | 1,055,744 | 196,737 | 1,252,481 |
+| `deepsets` (DeepSets, hidden 1024) | 1,055,744 | 196,737 | 1,252,481 |
 | OmniLearned-s, every variant | 1,389,477 | 1,315,334 | 2,704,811 |
 | OmniLearned-m | 30,475,825 | 20,989,958 | 51,465,783 |
 
@@ -247,10 +243,10 @@ regression mode OmniLearned computes `classifier(body(x))`, and its own training
 prints the total (`Total params: 2.70M`). A count of `body` alone understates the model
 by half. The checkpoint's `ema_body` is a running average of `body`, not extra weights,
 and is never counted. Which column the paper reports as "model size" is not settled.
-`baseline_1024` is 46% of OmniLearned-s by total and 76% by backbone.
+`deepsets` is 46% of OmniLearned-s by total and 76% by backbone.
 
 [src/count_params.py](src/count_params.py) reproduces the table from the checkpoints
-(terminal only): it counts every `run_0` checkpoint of each family at the three sizes
+(terminal only): it counts every `run_0` checkpoint of each family at the four sizes
 and warns if they disagree. It reports only the OmniLearned sizes listed in its
 `OMNILEARNED_SIZES`, currently just small; the medium row above was counted from a model
 built with the same settings, and matches the `Total params: 51.47M` that medium
@@ -259,10 +255,9 @@ training logs print.
 
 Every OmniLearned variant — from scratch, jet-pretrained, cosmology-pretrained,
 proxy-pretrained — trains the same architecture, so differences between them come only
-from initialisation. `baseline` and `baseline_256` are small sanity checks, **not**
-capacity-matched competitors.
+from initialisation.
 
-DeepSets parameters are h² + 199h + 129 for 3 input features, which reproduces every
+DeepSets parameters are h² + 199h + 129 for 3 input features, which reproduces the
 DeepSets row. The OmniLearned counts are from our trained stream checkpoints. The
 pretrain checkpoints differ, and finetuning loads every tensor whose name and shape
 match except the final `out.*` layer (513 weights), which is always re-initialised:
@@ -308,8 +303,9 @@ branch + argparse choices), [src/proxy_gallery.py](src/proxy_gallery.py) (visual
 [scripts/prepare_data_omnilearned.sh](scripts/prepare_data_omnilearned.sh),
 [scripts/omnilearned_summary.sh](scripts/omnilearned_summary.sh),
 [scripts/compute_bootstrap_shared_test_all.sh](scripts/compute_bootstrap_shared_test_all.sh),
-[scripts/eval_shared_test10000.sh](scripts/eval_shared_test10000.sh) and
-[evaluation/results_3d_shared_test10000.sh](evaluation/results_3d_shared_test10000.sh).
+[scripts/eval_shared_test10000.sh](scripts/eval_shared_test10000.sh),
+[evaluation/reproduce_main_figure.ipynb](evaluation/reproduce_main_figure.ipynb) (model list)
+and [src/print_r2.py](src/print_r2.py) (`_TABLE_MODELS`).
 
 **Forgetting any of the `target_models` lists is silent** — the model is simply skipped
 with "no valid results found", or its bootstrap column never gets computed. Model folder
@@ -321,7 +317,7 @@ Where a script's `sbatch` defaults live:
 
 | script | where the defaults are |
 |---|---|
-| `scripts/run_deepsets{,_256,_128}_submission.sh` | [scripts/submit_training_variant.sh](scripts/submit_training_variant.sh) |
+| `scripts/run_deepsets_submission.sh` | [scripts/submit_training_variant.sh](scripts/submit_training_variant.sh) |
 | everything under `scripts/omnilearned/` | the wrapper script itself |
 
 The `scripts/omnilearned/` wrappers interleave pre-submission logic (checkpoint copying,
@@ -362,7 +358,14 @@ Useful patterns:
   scratch and finetune submitter takes `MODEL_SUFFIX` (default empty) and `EPOCH_NUM`
   (default 100); a suffix puts the runs in a new sibling folder next to the existing one.
   The scratch learning-rate sweep uses this: `LR=1e-4 MODEL_SUFFIX=_lr1e-4` →
-  `omnilearned_scratch_lr1e-4`, the folder name the figure script expects.
+  `omnilearned_scratch_lr1e-4`, the folder name the figure notebook expects. DeepSets has
+  the same kind of sweep, through `scripts/run_deepsets_submission.sh` with the same two
+  variables (`deepsets_lr5e-4`, …). Both sweeps, with their lrs, are declared in
+  `LR_SWEEPS` in [src/build_results_table.py](src/build_results_table.py). At each size
+  the figure shows each swept model at the lr with the lowest mean best-val loss once
+  every lr of the sweep has all its seeds; until then at the default lr if that has all
+  its seeds, and not at all otherwise (each such size is printed). The table lists every
+  lr, with the selected one marked †.
 - **Model size**: the scratch and jet-finetune runners take `MODEL_SIZE` = `small`
   (default) | `medium` | `large`, and the jet finetune picks the matching checkpoint
   (`pretrain_s` / `_m` / `_l`). The submitters refuse a non-small size without an
@@ -420,17 +423,16 @@ before `sbatch`.
    `Val_Loss` are copied bit for bit from the one row of `shared_test10000/loss_history.csv`
    that carries a `Test_Loss`, i.e. the best-val epoch at which `best_model_.pt` was saved.
    So the `Best Val MSE` column of the step-4 CSV is the real validation loss on each run's
-   own split. **Step 4 reads only `bootstrap.csv`** (with the default `BOOTSTRAP=true`), so
-   a run without one is silently left out of the figure.
-4. [evaluation/results_3d_shared_test10000.sh](evaluation/results_3d_shared_test10000.sh)
-   feeds a list of `target_columns:dataset_size:target_model[:display_name]` strings to
-   [src/build_results_table.py](src/build_results_table.py), which finds the best-val
-   epoch, reads the test loss at that epoch, aggregates across seeds, and emits the CSV,
-   the scatter plot and the LaTeX table.
+   own split. **Step 4 reads only `bootstrap.csv`**, so a run without one is silently left
+   out of the figure.
+4. [evaluation/reproduce_main_figure.ipynb](evaluation/reproduce_main_figure.ipynb)
+   feeds a list of `(target_columns, dataset_size, target_model, display_name)` tuples to
+   `build_table` in [src/build_results_table.py](src/build_results_table.py), which finds
+   the best-val epoch, reads the test loss at that epoch, aggregates across seeds, and
+   emits the CSV, the scatter plot and the LaTeX table.
 
-The optional 4th colon-delimited field is a **display-name override**: paths still resolve
-via the on-disk folder name, while the CSV `Model` column and the plot legend use the
-override.
+The 4th field is a **display name**: paths still resolve via the on-disk folder name,
+while the CSV `Model` column and the plot legend use the display name.
 
 To look at specific runs without touching any figure, use
 [src/print_r2.py](src/print_r2.py): `python src/print_r2.py SIZE:MODEL[:RUNS] ...` prints
@@ -438,35 +440,33 @@ each run's R² and a summary in the appendix-table form, and writes nothing.
 
 ## Figure generation
 
-Defaults reproduce the paper with zero flags. Env-var toggles on
-`evaluation/results_3d_shared_test10000.sh`:
-
-| var | default | effect |
-|---|---|---|
-| `METRIC` | `r2` | `mse` for the raw-loss view |
-| `NESTED_ERROR` | `true` | two error bars: outer = stat ⊕ syst, inner band = mean bootstrap std |
-| `BOOTSTRAP` | `true` | implied by `NESTED_ERROR` |
-| `R2_YMIN` | `-0.3` | y-axis floor; any other value adds a `_ymin08`-style filename suffix, so the zoomed figure never overwrites the main one |
-| `LATEX_TABLE` | `true` | set `false` on a second pass that only changes the zoom — the table does not depend on the y-axis crop |
+[evaluation/reproduce_main_figure.ipynb](evaluation/reproduce_main_figure.ipynb) is the one
+place the paper's figures and table are made. Run top to bottom, it writes into
+`evaluation/` the main figure, the zoomed appendix figure (`r2_ymin=0.8`; the `_ymin08`
+filename suffix keeps it from overwriting the main one), the appendix LaTeX table and the
+CSV. It needs **no raw data**: it reads each run's `shared_test10000/bootstrap.csv` in the
+result folders (from the result archive) and the sidecar
+`evaluation/prog_mass_labels_10000_test.npy` for `Var(y_test)`. Its settings are the
+paper's: R², seeds 0–2, y-axis floor −0.3, and nested error bars (`combine_errors=True`
+with `error_column="Test_Loss_Bootstrap_Std"`: outer = stat ⊕ syst, inner band = mean
+bootstrap std). The zoom pass writes no table, since the table does not depend on the
+y-axis crop. `build_results_table.py` makes only these R² outputs and has no command
+line; to look at numbers in the terminal, use [src/print_r2.py](src/print_r2.py).
 
 Conventions inside [src/build_results_table.py](src/build_results_table.py):
 
-- **`--epochs` (default 100, the training default) is a cutoff on the `Epoch` column**:
-  rows above it are dropped before the best-val row is picked, and a run left with no
-  row disappears from the figure without a warning. The bootstrap CSVs carry the real
-  best-val epoch (see Evaluation flow, step 3), as does the full per-epoch
-  `shared_test10000/loss_history.csv` read with `BOOTSTRAP=false`. So for runs trained
-  longer than 100 epochs, pass `--epochs` at least `EPOCH_NUM`, or every run whose best
-  epoch is past 100 is dropped. The shell
-  script does not set it, so call `build_results_table.py` directly for those, and for
-  any one-off figure give `--output` / `--scatter_plot` / `--latex_table` paths outside
-  `evaluation/`.
+- **`epochs` (the notebook passes 100, the training default) is a cutoff on the `Epoch`
+  column**: rows above it are dropped before the best-val row is picked, and a run left
+  with no row disappears from the figure without a warning. The bootstrap CSVs carry the
+  real best-val epoch (see Evaluation flow, step 3), as does the full per-epoch
+  `shared_test10000/loss_history.csv`. So for runs trained longer than 100 epochs, pass
+  at least `EPOCH_NUM`, or every run whose best epoch is past 100 is dropped.
 - Each category (baseline / physics / synthetic / eigen) has a fixed list of colors in
   `_CATEGORY_STYLE`, handed out in rank order to the members present, and too many
   members in one category raises `ValueError`. Because of that a model's color depends
-  on the figure (the MSE view adds `average` first and shifts every baseline color), so
-  colors must not be hard-coded per model. The optional models (DeepSets 1024,
-  OmniLearned-m, PCA λ₂ / λ₃) are the exception: they take a fixed shade of their base
+  on which models the figure has (one more baseline ranked first shifts every baseline
+  color), so colors must not be hard-coded per model. The optional models (OmniLearned-m,
+  PCA λ₂ / λ₃) are the exception: they take a fixed shade of their base
   model's color from `_OPTIONAL_MODEL_COLORS` and sit next to it in rank, while the
   category swatches still go to the paper's models only. Adding an optional model
   therefore never recolors anything, and every figure without one is byte-identical to
@@ -475,18 +475,11 @@ Conventions inside [src/build_results_table.py](src/build_results_table.py):
 
 - `_PRETTY_MODEL_NAMES` affects **plot legends and the LaTeX table only**. The CSV
   `Model` column keeps the raw display names so it stays parseable by exact name.
-- `generate_scatter_plot` treats the x-axis as **categorical**: the three dataset sizes
-  are drawn evenly spaced even though 180→600 is 3.3× and 600→6,000 is 10×. Vertical
+- `generate_scatter_plot` treats the x-axis as **categorical**: the dataset sizes
+  are drawn evenly spaced even though their ratios differ. Vertical
   gridlines are off, the regions get alternating shading and a boundary line, tick marks
   are removed and the labels read `N = 180`. Do not "fix" this into a log axis — the even
   spacing is deliberate and the styling exists to stop it being misread as a number line.
-
-`evaluation/reproduce_main_figure.ipynb` produces the same main figure, zoom figure and
-table **without any raw data** — it reads the per-run CSVs in the result folders (from the
-result archive) and the sidecar
-`evaluation/prog_mass_labels_10000_test.npy` for `Var(y_test)`. The shell script instead
-needs `raw_data/prog_mass_reg_dataset_10000.h5`. Both paths must stay byte-identical in
-their outputs; if you change one, re-run the other and diff.
 
 [src/proxy_gallery.py](src/proxy_gallery.py) writes all 16 gallery files with
 `--proxy_type all --input_raw raw_data/prog_mass_reg_dataset_10000.h5`. Vocabulary there

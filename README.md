@@ -53,14 +53,13 @@ Firstly, we need to do the simulation with GALA:
 ```
 cd /path/to/Stream_Transfer_Learning
 cd scripts
-NUM_STREAMS_LIST="300 1000 10000" bash prepare_raw_data_submission.sh
+NUM_STREAMS_LIST="40 100 300 1000 10000" bash prepare_raw_data_submission.sh
 ```
 Secondly, we need to make the raw simulation dataset suitable for training:
 ```
 cd /path/to/Stream_Transfer_Learning
-cd scripts
-TARGET_COLUMNS="3d_x_y_z" bash prepare_data_omnilearned.sh
-TARGET_COLUMNS="3d_x_y_z" bash prepare_data_baseline.sh
+bash scripts/prepare_data_omnilearned.sh
+bash scripts/prepare_data_deepsets.sh
 ```
 
 ### Geometry datasets
@@ -68,8 +67,7 @@ TARGET_COLUMNS="3d_x_y_z" bash prepare_data_baseline.sh
 Firstly, to generate the 6 geometry shapes:
 ```
 cd /path/to/Stream_Transfer_Learning
-cd scripts
-DATASET_SIZES="10000" TARGET_COLUMNS="3d_proxy_cube 3d_proxy_bounded_ball 3d_proxy_gaussian_ball 3d_proxy_ellipsoid 3d_proxy_hard_ellipsoid 3d_proxy_box" bash prepare_data_proxy_pretrain.sh
+DATASET_SIZES="10000" TARGET_COLUMNS="3d_proxy_cube 3d_proxy_bounded_ball 3d_proxy_gaussian_ball 3d_proxy_ellipsoid 3d_proxy_hard_ellipsoid 3d_proxy_box" bash scripts/prepare_data_proxy_pretrain.sh
 ```
 
 However, some may have in total 3 targets while some only have 1 target. So secondly, to be consistent, we adopted the long axis of the anisotropic shapes as the only regression target:
@@ -95,7 +93,7 @@ python src/make_eigen_lambda_from_streams.py --index 1
 ```
 cd /path/to/Stream_Transfer_Learning
 for proxy in 3d_proxy_cube 3d_proxy_bounded_ball 3d_proxy_gaussian_ball 3d_proxy_gaussian_ellipsoid_sigmax 3d_proxy_bounded_ellipsoid_a 3d_proxy_box_a 3d_x_y_z_eigenvalues_lambda1; do
-    TARGET_COLUMN="$proxy" bash scripts/stream_1x4/run_omnilearned_proxy_pretrain_1x4_submission.sh
+    TARGET_COLUMN="$proxy" bash scripts/omnilearned/run_omnilearned_proxy_pretrain_submission.sh
 done
 ```
 ### Fine-tuning and evaluating models
@@ -107,10 +105,10 @@ cd /path/to/Stream_Transfer_Learning
 for proxy in cube bounded_ball gaussian_ball gaussian_ellipsoid_sigmax bounded_ellipsoid_a box_a eigen_lambda1; do
     pretrain_dir="3d_proxy_${proxy}_10000"
     [[ "$proxy" == "eigen_lambda1" ]] && pretrain_dir="3d_x_y_z_eigenvalues_lambda1_10000"
-    ckpt="$(pwd)/${pretrain_dir}/omnilearned_proxy_pretrain_1x4/run_0/best_model_.pt"
+    ckpt="$(pwd)/${pretrain_dir}/omnilearned_proxy_pretrain/run_0/best_model_.pt"
 
-    for s in 300 1000 10000; do
-        PROXY_DATASET="$proxy" PRETRAIN_CKPT="$ckpt" DATASET_SIZE="$s" bash scripts/stream_1x4/run_omnilearned_proxy_finetune_1x4_submission.sh
+    for s in 40 100 300 1000; do
+        PROXY_DATASET="$proxy" PRETRAIN_CKPT="$ckpt" DATASET_SIZE="$s" bash scripts/omnilearned/run_omnilearned_proxy_finetune_submission.sh
     done
 done
 ```
@@ -118,19 +116,22 @@ done
 #### Other Deep Learning models (scratch and physics pre-trained models)
 ```
 cd /path/to/Stream_Transfer_Learning
-for s in 300 1000 10000; do
-    # DeepSets baseline
-    DATASET_SIZE="$s" bash scripts/run_baseline_256_submission.sh
+for s in 40 100 300 1000; do
+    # OmniLearned from scratch: lr 5e-5 (default), plus 1e-5 and 1e-4
+    DATASET_SIZE="$s" bash scripts/omnilearned/run_omnilearned_scratch_submission.sh
+    for lr in 1e-5 1e-4; do
+        LR="$lr" MODEL_SUFFIX="_lr$lr" DATASET_SIZE="$s" bash scripts/omnilearned/run_omnilearned_scratch_submission.sh
+    done
 
-    # OmniLearned from scratch
-    DATASET_SIZE="$s" bash scripts/stream_1x4/run_omnilearned_scratch_1x4_submission.sh
-    
     # OmniLearned physics pre-trained models
     ## Jet physics
-    DATASET_SIZE="$s" bash scripts/stream_1x4/run_omnilearned_finetune_1x4_submission.sh
+    DATASET_SIZE="$s" bash scripts/omnilearned/run_omnilearned_jet_finetune_submission.sh
     ## Cosmology (from OmniCosmos)
-    PRETRAIN_SOURCE=camels  DATASET_SIZE="$s" bash scripts/stream_1x4/run_omnicosmos_finetune_1x4_submission.sh
-    PRETRAIN_SOURCE=quijote DATASET_SIZE="$s" bash scripts/stream_1x4/run_omnicosmos_finetune_1x4_submission.sh
+    PRETRAIN_SOURCE=camels  DATASET_SIZE="$s" bash scripts/omnilearned/run_omnicosmos_finetune_submission.sh
+    PRETRAIN_SOURCE=quijote DATASET_SIZE="$s" bash scripts/omnilearned/run_omnicosmos_finetune_submission.sh
+
+    # DeepSets baseline (hidden 1024)
+    DATASET_SIZE="$s" bash scripts/run_deepsets_submission.sh
 done
 ```
 
@@ -154,22 +155,9 @@ done
 
 ## Generation of the figures
 
-Only the $R^2$ figure (along with its zoom version) can be generated without downloading additional datasets! See [reproduce_main_figure.ipynb](evaluation/reproduce_main_figure.ipynb) for quick, interactive view!
+### The main $R^2$ comparison figure
 
-For command lines/scripts approach, see below
-
-### $R^2$ among all the models
-The main figure (and a table tex file) can be generated with:
-```
-cd /path/to/Stream_Transfer_Learning
-bash evaluation/results_3d_shared_test10000.sh
-```
-
-For zoom version:
-```
-cd /path/to/Stream_Transfer_Learning
-R2_YMIN=0.8 LATEX_TABLE=false bash evaluation/results_3d_shared_test10000.sh
-```
+Only the $R^2$ figure (along with its zoom version) can be generated without downloading additional datasets! See [reproduce_main_figure.ipynb](evaluation/reproduce_main_figure.ipynb) for quick generation and interactive view!
 
 ### Gallery for geometry datasets
 

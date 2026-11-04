@@ -3,15 +3,17 @@ import h5py
 import numpy as np
 import torch
 from torch.utils.data import Dataset
-from sklearn.model_selection import train_test_split
 
 from exp_paths import compute_input_stats, find_label_key
 
 
 def train_target_stats(h5_path):
-    """Mean and std of the train split's target (the first 60%), which the model
-    is trained to predict z-scored -- the same numbers prepare_data.py saves for
-    OmniLearned in data/streams/target_stats.npz (same raw targets, same split)."""
+    """Computes the mean and std of the train split's target (the first 60%), which the model learns to predict z-scored.
+
+    Returns (mean, std) as floats, where std is the population std (np.std); these are the same numbers that prepare_data.py saves for OmniLearned in data/streams/target_stats.npz, since both use the same raw targets and split.
+
+    `h5_path`: a deepsets_dataset.h5.
+    """
     with h5py.File(h5_path, 'r') as f:
         y = f[find_label_key(f)]
         y = y[:int(y.shape[0] * 0.6)]
@@ -19,9 +21,12 @@ def train_target_stats(h5_path):
 
 
 def train_input_stats(h5_path):
-    """Per-feature (mean, std) of the train split's inputs, from
-    exp_paths.compute_input_stats -- the same numbers prepare_data.py saves for
-    OmniLearned in data/streams/input_stats.npz (same raw coordinates, same split)."""
+    """Computes the input statistics of the train split (the first 60%) with exp_paths.compute_input_stats.
+
+    Returns (mean, std), one entry per axis: the mean is 0 and every std is the one pooled length scale; the same numbers prepare_data.py saves for OmniLearned in data/streams/input_stats.npz (same raw coordinates, same split).
+
+    `h5_path`: a deepsets_dataset.h5.
+    """
     with h5py.File(h5_path, 'r') as f:
         x = f['raw_data']
         x = x[:int(x.shape[0] * 0.6)]
@@ -29,8 +34,11 @@ def train_input_stats(h5_path):
 
 
 class StreamDataset(Dataset):
-    """One split of deepsets_dataset.h5, with the inputs normalized and the
-    target z-scored with the train split's statistics, as OmniLearned gets them."""
+    """One split of deepsets_dataset.h5, with the inputs normalized and the target z-scored with the train split's statistics, as OmniLearned gets them.
+
+    `h5_path`: the deepsets_dataset.h5; the splits are its first 60% (train), next 20% (val) and last 20% (test).
+    `mode`: 'train', 'val' or 'test'.
+    """
     def __init__(self, h5_path, mode='train'):
         self.h5_path = h5_path
         self.mode = mode
@@ -63,9 +71,11 @@ class StreamDataset(Dataset):
         self.input_std = torch.tensor(input_std, dtype=torch.float32)
 
     def __len__(self):
+        """Number of streams in the split."""
         return len(self.active_indices)
 
     def __getitem__(self, idx):
+        """(normalized inputs, z-scored target, row index in the file) of the idx-th stream of the split; the file is opened on first use, in each DataLoader worker."""
         if self.file is None:
             self.file = h5py.File(self.h5_path, 'r')
 
@@ -79,5 +89,6 @@ class StreamDataset(Dataset):
         return data, label, real_idx
 
     def __del__(self):
+        """Closes the HDF5 file if it was opened."""
         if self.file is not None:
             self.file.close()

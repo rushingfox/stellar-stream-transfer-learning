@@ -1,5 +1,4 @@
-"""Print shared-test R^2 per run, plus an "R2 ± total (bootstrap)" summary per model
-(the same numbers as the appendix table, for the same runs).
+"""Prints the shared-test R^2 of each run, plus an "R2 ± total (bootstrap)" summary per model, the same numbers as the appendix table for the same runs.
 
     python src/print_r2.py SIZE:MODEL[:RUNS] [SIZE:MODEL[:RUNS] ...]
 
@@ -8,18 +7,15 @@
         300:omnilearned_proxy_gaussian_ball_finetune:0,1,2 \\
         300:eigenvalue_regression:0
 
-MODEL is the on-disk folder name; RUNS defaults to 0,1,2. Each run needs its
-shared-test evaluation and bootstrap; a missing file is an error, not a skipped run.
---task picks the runs (prog_mass_ or subhalo_<target_columns>_<size>/) and that task's
-evaluation/<task>_labels_10000_test.npy. --compact prints only the summary, one line
-per model (N = training streams, 3/5 of SIZE; readable model names), with the same numbers;
+MODEL is the on-disk folder name; RUNS defaults to 0,1,2.
+Each run needs its shared-test evaluation and bootstrap; a missing file is an error, not a skipped run.
+--task picks the runs (prog_mass_ or subhalo_<target_columns>_<size>/) and that task's evaluation/<task>_labels_10000_test.npy.
+--compact prints only the summary, one line per model (N = training streams, 3/5 of SIZE; readable model names), with the same numbers.
 --sort_r2 then orders each N's lines by mean R2, highest first, instead of the command order.
 
     python src/print_r2.py --table
 
-prints the appendix table in plain text instead, and takes no SIZE:MODEL: every model of
-the paper's figure and table (rows) at every size (columns), "R2 ± total", with * on the
-best mean of each column and † on the scratch lr chosen by validation loss.
+prints the appendix table in plain text instead, and takes no SIZE:MODEL: every model of the paper's figure and table (rows) at every size (columns), "R2 ± total", with * on the best mean of each column and † on the lr chosen by validation loss in each lr sweep (OmniLearned scratch and DeepSets).
 """
 import argparse
 import itertools
@@ -33,12 +29,15 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT / "src"))
 
 from build_results_table import (  # noqa: E402
-    SCRATCH_LR_PREFIX,
-    SCRATCH_MODEL,
+    LR_SWEEPS,
+    VAL_SELECTED_SUFFIX,
     compute_test_label_variance_from_labels,
     load_one_run,
-    select_scratch_lr,
+    report_sweep_selection,
+    requested_sweeps,
+    select_sweep_lr,
     summarize_model,
+    sweep_base,
 )
 from exp_paths import (  # noqa: E402
     BOOTSTRAP_CSV,
@@ -57,15 +56,12 @@ from exp_paths import (  # noqa: E402
 # The bootstrap CSV has one pre-selected row, so no epoch cutoff is needed.
 NO_EPOCH_CUTOFF = 10**9
 
-# Model names for --compact: the figure's names for the paper's models (in plain text),
-# with the folder's _lr<LR> / _ep<N> suffix spelled out. A folder not matched here
-# prints as is.
+# Model names for --compact: the figure's names for the paper's models, in plain text, with the folder's _lr<LR> / _ep<N> suffix spelled out.
+# A folder not matched here prints as is.
 _BASE_NAMES = {
     "average": "Mean Baseline",
     "eigenvalue_regression": "Eigenvalue Regression",
     "deepsets": "DeepSets",
-    "deepsets_256": "DeepSets (256)",
-    "deepsets_128": "DeepSets (128)",
     "omnilearned_scratch": "OmniLearned (Scratch)",
     "omnilearned_jet_finetune": "OmniLearned (HEP Jets)",
     "omnicosmos_camels_finetune": "OmniCosmos-C",
@@ -88,20 +84,28 @@ _TASK_TARGETS = {
     "prog_mass": "log10 mass of the stream's progenitor",
     "subhalo": "log10 M(<10 pc) of the subhalo that perturbed the stream",
 }
-# The scratch runner's defaults, shown so its rows compare with the lr/epoch variants.
-_SCRATCH_DEFAULT_LR, _SCRATCH_DEFAULT_EPOCHS = "5e-5", "100"
+# The scratch runner's default epochs, spelled out in its --compact name (as each lr sweep's default lr is, from build_results_table.LR_SWEEPS) so it compares with the _ep<N> variants.
+_SCRATCH_DEFAULT_EPOCHS = "100"
 
-# --table: the rows and columns of the appendix table
-# (evaluation/results_3d_shared_test10000.sh), as (folder, name) in table order.
+# --table: the columns and rows of the appendix table (evaluation/reproduce_main_figure.ipynb), the rows as (folder, name) in table order.
 _TABLE_SIZES = (40, 100, 300, 1000)
-_TABLE_SCRATCH_LRS = ("1e-4", "2e-4", "5e-4", "1e-3")
+def _sweep_rows(base):
+    """Gives the --table rows of one lr sweep.
+
+    Returns [(folder, name), ...]: first the val-selected row (no folder of its own; per size, the lr with the lowest mean best-val loss), then one row per lr; folders are the swept model's name in lowercase, which sweep_base matches too.
+
+    `base`: an LR_SWEEPS key, e.g. 'DeepSets'.
+    """
+    sweep, folder = LR_SWEEPS[base], base.lower()
+    return ([(folder + VAL_SELECTED_SUFFIX.lower(), sweep["table_name"])]
+            + [(folder if lr == sweep["default_lr"] else f"{folder}_lr{lr}", sweep["label"].format(f"lr {lr}"))
+               for lr in sweep["lrs"]])
+
+
 _TABLE_MODELS = (
-    [("eigenvalue_regression", "Eigenvalue Regression"),
-     ("deepsets", "DeepSets"),
-     # Not a folder: per size, the scratch lr below with the lowest mean best-val loss.
-     (_VAL_SELECTED_ROW := "val_selected_scratch", "OmniLearned (Scratch, val-selected lr)"),
-     ("omnilearned_scratch", f"OmniLearned (Scratch, lr {_SCRATCH_DEFAULT_LR})")]
-    + [(f"omnilearned_scratch_lr{lr}", f"OmniLearned (Scratch, lr {lr})") for lr in _TABLE_SCRATCH_LRS]
+    [("eigenvalue_regression", "Eigenvalue Regression")]
+    + _sweep_rows("DeepSets")
+    + _sweep_rows("OmniLearned_Scratch")
     + [("omnilearned_jet_finetune", "OmniLearned (HEP Jets)"),
        ("omnicosmos_camels_finetune", "OmniCosmos-C"),
        ("omnicosmos_quijote_finetune", "OmniCosmos-Q"),
@@ -113,12 +117,16 @@ _TABLE_MODELS = (
        ("omnilearned_proxy_gaussian_ellipsoid_sigmax_finetune", "Gaussian Ellipsoid"),
        ("omnilearned_proxy_eigen_lambda1_finetune", "Real-Stream PCA")]
 )
+_VAL_SELECTED_FOLDERS = {base.lower() + VAL_SELECTED_SUFFIX.lower() for base in LR_SWEEPS}
 
 
 def display_name(folder):
-    """Readable name for a model folder, e.g. omnilearned_proxy_cube_finetune
-    -> 'Cube', omnilearned_scratch_lr1e-4_ep50 -> 'OmniLearned (Scratch),
-    lr 1e-4, 50 ep'."""
+    """Gives the readable --compact name of a model folder.
+
+    Returns e.g. 'Cube' for omnilearned_proxy_cube_finetune and 'OmniLearned (Scratch), lr 1e-4, 50 ep' for omnilearned_scratch_lr1e-4_ep50; a folder it does not know, as is.
+
+    `folder`: the on-disk model folder name.
+    """
     base, lr, epochs = re.fullmatch(r"(.+?)(?:_lr([0-9.e-]+))?(?:_ep(\d+))?", folder).groups()
     proxy = re.fullmatch(r"omnilearned_proxy_(.+?)_finetune", base)
     if proxy and proxy.group(1) in _PROXY_NAMES:
@@ -127,13 +135,21 @@ def display_name(folder):
         name = _BASE_NAMES[base]
     else:
         return folder
+    if sweep_base(base) is not None:
+        lr = lr or LR_SWEEPS[sweep_base(base)]["default_lr"]
     if base == "omnilearned_scratch":
-        lr, epochs = lr or _SCRATCH_DEFAULT_LR, epochs or _SCRATCH_DEFAULT_EPOCHS
+        epochs = epochs or _SCRATCH_DEFAULT_EPOCHS
     details = ([f"lr {lr}"] if lr else []) + ([f"{epochs} ep"] if epochs else [])
     return ", ".join([name] + details)
 
 
 def parse_spec(spec):
+    """Parses one SIZE:MODEL[:RUNS] argument.
+
+    Returns (size, model folder, run indices), the runs [0, 1, 2] if not given; exits with a message on a malformed spec.
+
+    `spec`: e.g. '300:omnilearned_scratch:0,1,2'.
+    """
     parts = spec.split(":")
     if len(parts) not in (2, 3) or not all(parts[:2]):
         raise SystemExit(f"Bad spec '{spec}': expected SIZE:MODEL[:RUNS], e.g. 300:omnilearned_scratch:0,1,2")
@@ -148,8 +164,12 @@ def parse_spec(spec):
 
 
 def best_epoch(run_files):
-    """(best-val epoch, total epochs); None if there is no training curve
-    (eigenvalue_regression). Test_Loss is filled only on the best-val row."""
+    """Finds a run's best-val epoch: the one row of its shared-test loss_history.csv with a Test_Loss, which is filled only on the best-val row.
+
+    Returns (best-val epoch, total epochs); None if the run has no training curve (one epoch, as for eigenvalue_regression); exits if there is not exactly one such row.
+
+    `run_files`: the run's files, from required_files.
+    """
     # utf-8-sig strips the BOM that OmniLearned CSVs start with.
     n_epochs = len(pd.read_csv(run_files["train"], encoding="utf-8-sig"))
     if n_epochs <= 1:
@@ -162,22 +182,34 @@ def best_epoch(run_files):
 
 
 def required_files(target_columns, size, model, idx, task):
+    """Lists the files print_r2 reads for one run.
+
+    Returns {'train': results/loss_history.csv, 'shared': shared_test<N>/loss_history.csv, 'bootstrap': shared_test<N>/bootstrap.csv}, as paths in the run dir.
+
+    `target_columns`, `size`, `model`, `idx`, `task`: pick the run dir.
+    """
     shared_dir = get_shared_test_dir(REPO_ROOT, target_columns, size, model, idx, task=task)
     return {"train": get_loss_history_csv_path(REPO_ROOT, target_columns, size, model, idx, task=task),
             "shared": shared_dir / SHARED_TEST_CSV, "bootstrap": shared_dir / BOOTSTRAP_CSV}
 
 
 def report(target_columns, size, model, runs, var, task, compact_width=None):
-    """compact_width: instead of printing, return (mean R2, summary line) with the model
-    name padded to this width."""
+    """Prints the R^2 of each run of one model at one size, then its "R2 ± total (bootstrap)" summary from the same summarize_model call as the appendix table.
+
+    Returns nothing; with compact_width it prints nothing and returns (mean R2, summary line) instead; exits if the model folder or a run's file is missing.
+
+    `target_columns`, `size`, `model`, `task`: pick the model folder.
+    `runs`: the run indices.
+    `var`: Var(y_test), to turn MSE into R^2.
+    `compact_width`: for --compact, the width the model name is padded to; None prints the full report.
+    """
     model_dir = get_model_dir(REPO_ROOT, target_columns, size, model, task)
     if not model_dir.is_dir():
         raise SystemExit(f"Model folder not found: {model_dir}")
 
     compact = compact_width is not None
     files = {idx: required_files(target_columns, size, model, idx, task) for idx in runs}
-    # The training curve only supplies the best-val epoch, which compact mode does not
-    # print, so it is not required there (the subhalo non-ML baselines have none).
+    # The training curve only supplies the best-val epoch, which compact mode does not print, so compact mode does not require it (the subhalo non-ML baselines have none).
     missing = [str(p) for f in files.values() for name, p in f.items()
                if not p.exists() and not (compact and name == "train")]
     if missing:
@@ -198,13 +230,13 @@ def report(target_columns, size, model, runs, var, task, compact_width=None):
         ep_str = f"{ep[0]:>3}/{ep[1]:<3}" if ep else "   —   "
         print(f"  run_{idx}: best-val epoch {ep_str}  R2 {r2:.3f}   (bootstrap {boot / var:.3f})")
 
-    # Same call as the appendix table: total = cross-run std (+) mean bootstrap std.
+    # Same call as the appendix table: total is the cross-run std and the mean bootstrap std added in quadrature.
     _, row = summarize_model(REPO_ROOT, target_columns, size, model, runs, NO_EPOCH_CUTOFF,
                              test_csv_name=f"{shared_test_dirname()}/{BOOTSTRAP_CSV}",
                              error_column="Test_Loss_Bootstrap_Std", combine_errors=True, task=task)
     mean_r2 = 1.0 - row["Mean Test MSE"] / var
     total = row["Std Test MSE"] / var
-    # Single run: no cross-run term, so total = bootstrap.
+    # A single run has no cross-run term (and no Stat Std column), so its bootstrap std is the total.
     boot_mean = row.get("Stat Std Test MSE", row["Std Test MSE"]) / var
     if compact:
         return mean_r2, (f"{int(size * 0.6):>5}  {display_name(model):<{compact_width}}  "
@@ -215,41 +247,51 @@ def report(target_columns, size, model, runs, var, task, compact_width=None):
 
 
 def print_table(target_columns, var, task):
-    """The appendix table in plain text: the same numbers, bold best -> *, dagger -> †."""
-    rows = []  # plot rows of summarize_model, named like the figure so select_scratch_lr applies
-    for size in _TABLE_SIZES:
-        for folder, _ in _TABLE_MODELS:
-            if folder == _VAL_SELECTED_ROW:
-                continue
-            plot_name = (SCRATCH_MODEL if folder == "omnilearned_scratch"
-                         else folder.replace("omnilearned_scratch_lr", SCRATCH_LR_PREFIX))
-            _, row = summarize_model(REPO_ROOT, target_columns, size, folder, [0, 1, 2], NO_EPOCH_CUTOFF,
-                                     display_name=plot_name,
-                                     test_csv_name=f"{shared_test_dirname()}/{BOOTSTRAP_CSV}",
-                                     error_column="Test_Loss_Bootstrap_Std", combine_errors=True, task=task)
-            if row is not None:
-                rows.append({**row, "folder": folder, "size": size,
-                             "r2": 1.0 - row["Mean Test MSE"] / var, "total": row["Std Test MSE"] / var})
-    selected, val_rows = select_scratch_lr(rows)
+    """Prints the appendix table in plain text: the same numbers, with * for the bold best mean and † for the dagger.
+
+    Returns nothing.
+
+    `target_columns`: the experiment folders' input columns, e.g. 3d_x_y_z.
+    `var`: Var(y_test), to turn MSE into R^2.
+    `task`: 'prog_mass' or 'subhalo'.
+    """
+    runs = [0, 1, 2]  # the figure's seeds
+    model_list = [(target_columns, size, folder, folder) for size in _TABLE_SIZES
+                  for folder, _ in _TABLE_MODELS if folder not in _VAL_SELECTED_FOLDERS]
+    rows = []  # plot rows of summarize_model, for select_sweep_lr
+    for _, size, folder, _ in model_list:
+        _, row = summarize_model(REPO_ROOT, target_columns, size, folder, runs, NO_EPOCH_CUTOFF,
+                                 display_name=folder,
+                                 test_csv_name=f"{shared_test_dirname()}/{BOOTSTRAP_CSV}",
+                                 error_column="Test_Loss_Bootstrap_Std", combine_errors=True, task=task)
+        if row is not None:
+            rows.append({**row, "folder": folder, "size": size,
+                         "r2": 1.0 - row["Mean Test MSE"] / var, "total": row["Std Test MSE"] / var})
+    selected, val_rows, _, status = select_sweep_lr(rows, len(runs), requested_sweeps(model_list, task))
+    report_sweep_selection(status, problems_only=True)
     best = {size: max(r["r2"] for r in rows if r["size"] == size) for size in _TABLE_SIZES}
     cell = {(r["folder"], r["size"]): f"{r['r2']:.3f} ± {r['total']:.3f}"
             + ("*" if r["r2"] == best[r["size"]] else "")
-            + ("†" if selected.get(r["Dataset"]) == r["Model_Name"] else "")
+            + ("†" if selected.get((r["Dataset"], sweep_base(r["Model_Name"]))) == r["Model_Name"] else "")
             for r in rows}
-    # The val-selected row repeats the chosen lr's numbers (copied rows keep their size/r2/total).
-    cell.update({(_VAL_SELECTED_ROW, r["size"]): f"{r['r2']:.3f} ± {r['total']:.3f}"
+    # A val-selected row repeats the chosen lr's numbers (copied rows keep their size/r2/total).
+    cell.update({(r["Model_Name"].lower(), r["size"]): f"{r['r2']:.3f} ± {r['total']:.3f}"
                  + ("*" if r["r2"] == best[r["size"]] else "")
                  for r in val_rows})
 
     width = max(len(name) for _, name in _TABLE_MODELS)
     print(f"task: {task} | R2 ± total on {shared_test_dirname()} | "
-          f"* best mean per column, † scratch lr with the lowest mean best-val loss")
+          f"* best mean per column, † the lr with the lowest mean best-val loss in each lr sweep")
     print(f"{'model':<{width}}" + "".join(f"  {'N = ' + str(int(size * 0.6)):<15}" for size in _TABLE_SIZES))
     for folder, name in _TABLE_MODELS:
         print(f"{name:<{width}}" + "".join(f"  {cell.get((folder, size), '--'):<15}" for size in _TABLE_SIZES))
 
 
 def main():
+    """Parses the command line and prints the per-run report, the --compact summary or the --table.
+
+    Returns nothing.
+    """
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("specs", nargs="*", metavar="SIZE:MODEL[:RUNS]")
     parser.add_argument("--table", action="store_true",

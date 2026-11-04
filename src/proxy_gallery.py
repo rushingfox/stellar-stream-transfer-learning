@@ -1,14 +1,9 @@
-"""Proxy gallery: visualise the TARGET of each proxy task on a fresh sample.
+r"""Draws the gallery of the proxy pretraining tasks, one figure per proxy, each with its regression target marked.
 
-Each proxy gets its own PNG so that no false correspondence is implied
-between the proxies (e.g. cube has no physical analogue in real streams).
-
-gaussian_ellipsoid_sigmax, bounded_ellipsoid_a and box_a are 1-target proxies
-(only the first/largest axis is the training target). The point clouds shown
-are still genuinely 3-D
-anisotropic shapes (that's the input geometry); only the TITLE/target and axis
-emphasis reflect the fact that just one dimension is the actual regression
-target now (the other two axes are drawn muted, for shape context only).
+Each proxy gets its own figure, so that no correspondence between proxies is implied (the cube, for example, has no analogue in real streams).
+The synthetic shapes are sampled afresh here, the same way src/prepare_data.py samples them; the eigen panels are real streams from --input_raw.
+In gaussian_ellipsoid_sigmax, bounded_ellipsoid_a, box_a and eigen the point cloud is genuinely 3D and anisotropic, but only the first (longest) axis is the target: it is drawn in the accent color, and the other two axes are muted, for shape context only.
+Every figure is written as PNG and as PDF.
 
 Output files (under --output_dir):
     gallery_cube.png                    proxy_cube                       - target = $a$
@@ -18,6 +13,7 @@ Output files (under --output_dir):
     gallery_bounded_ellipsoid_a.png     proxy_bounded_ellipsoid_a        - target = $a$
     gallery_box_a.png                   proxy_box_a                      - target = $a$
     gallery_eigen.png                   proxy_stream_eigenvalues_lambda1 - target = $\sqrt{\lambda_1}$
+    gallery_combined.png                the six synthetic proxies, 2 rows (isotropic, anisotropic) x 3 columns
 """
 import argparse
 import os
@@ -27,17 +23,15 @@ import numpy as np
 import matplotlib.pyplot as plt
 from mpl_toolkits.mplot3d import Axes3D  # noqa: F401  (registers 3d projection)
 
-# Paper style: LaTeX-rendered text, sans-serif Helvetica (matches
-# build_results_table.py). Requires a working LaTeX on PATH (e.g.
-# `module load texlive/2024` loaded AFTER activating the conda env, since
-# conda activation otherwise takes PATH priority).
+# Paper style: LaTeX text in Helvetica, as in build_results_table.py.
+# Needs LaTeX on PATH: run `module load texlive/2024` after activating the conda env, or conda takes PATH priority.
 plt.rcParams.update({
     "text.usetex": True,
     "font.family": "sans-serif",
     "font.sans-serif": ["Helvetica"],
 })
 
-# Display names shown in figure titles and evaluation plots.
+# Proxy names in the gallery suptitles (make_gallery draws none for eigen).
 _PROXY_DISPLAY_NAMES = {
     'cube':                     'proxy_cube',
     'bounded_ball':             'proxy_bounded_ball',
@@ -48,9 +42,8 @@ _PROXY_DISPLAY_NAMES = {
     'eigen':                    'proxy_stream_eigenvalues_lambda1',
 }
 
-# LaTeX target description shown in the figure suptitle. Note: for the three
-# 1-target proxies this is the ACTUAL training target (one scalar), not the
-# full 3-D shape parameters shown in the point-cloud geometry.
+# Target in each gallery suptitle, in LaTeX.
+# For the anisotropic proxies it is the one scalar actually trained on, and the other shape parameters are named only for context.
 _TARGET_DESCRIPTIONS = {
     'cube':                     r'$a$',
     'bounded_ball':             r'$r$',
@@ -65,14 +58,13 @@ ALL_PROXY_TYPES = ['cube', 'gaussian_ellipsoid_sigmax', 'bounded_ball',
                    'gaussian_ball', 'bounded_ellipsoid_a', 'box_a', 'eigen', 'combined']
 
 VIEW_INIT = dict(elev=20, azim=45)
+# matplotlib is pinned <3.11 (pyproject.toml), because 3.11's axes3d.depthshade_minalpha multiplies into this alpha and washes the point clouds out.
 POINT_KW = dict(s=1, c='steelblue', alpha=0.2, edgecolors='none', zorder=1)
 ACCENT = 'crimson'
-WIREFRAME_COLOR = '#555555'  # neutral dark gray, won't clash with RGB axis arrows
-# Per-axis colors for principal-axis arrows (matches the conventional RGB xyz)
+WIREFRAME_COLOR = '#555555'  # neutral dark gray, won't clash with the colored axis arrows
+# Default per-axis arrow colors of draw_principal_axes; every gallery panel passes its own (ACCENT and MUTED_AXIS_COLOR).
 AXIS_COLORS = ('#e03030', '#d68020', '#9467bd')  # red, amber, purple (colorblind-friendly)
-# For the three 1-target proxies (gaussian_ellipsoid_sigmax, bounded_ellipsoid_a,
-# box_a): the target axis (dim 0) uses ACCENT; the other two are muted gray to
-# show they're shape geometry only, not part of the training target.
+# In the anisotropic and eigen panels the target axis (dim 0) is drawn in ACCENT and the other two in this gray, as shape context that is not part of the target.
 MUTED_AXIS_COLOR = '#999999'
 LABEL_BBOX = dict(facecolor='white', alpha=0.0, edgecolor='none', pad=1.2)
 # Draw ellipsoids at 2-sigma so they stay visible even when one axis is tiny.
@@ -82,6 +74,12 @@ ELLIPSOID_K = 2.0
 # ---------- random helpers ----------
 
 def random_rotation_matrix(rng):
+    """Draws a random 3D rotation, rz @ ry @ rx with three angles uniform in [0, 2pi), the convention of src/prepare_data.py.
+
+    Returns the 3x3 rotation matrix.
+
+    `rng`: a numpy Generator.
+    """
     theta = rng.uniform(0, 2 * np.pi, 3)
     rx = np.array([[1, 0, 0],
                    [0, np.cos(theta[0]), -np.sin(theta[0])],
@@ -98,12 +96,28 @@ def random_rotation_matrix(rng):
 # ---------- proxy synthesis (mirrors src/prepare_data.py) ----------
 
 def synth_cube(a, n_particles, rng, rotated=False):
+    """Samples a uniformly filled cube of edge a, centred at the origin.
+
+    Returns (points, R): the (n_particles, 3) points and the rotation applied (the identity if not rotated).
+
+    `a`: the edge length, the cube proxy's target.
+    `n_particles`: the number of points.
+    `rng`: a numpy Generator.
+    `rotated`: apply a random rotation, as training does.
+    """
     points = rng.uniform(-a / 2, a / 2, size=(n_particles, 3))
     R = random_rotation_matrix(rng) if rotated else np.eye(3)
     return points @ R.T, R
 
 
 def synth_ellipsoid(sigmas, n_particles, rng, rotated=False):
+    """Samples a 3D Gaussian with one sigma per axis.
+
+    Returns (points, R): the (n_particles, 3) points and the rotation applied (the identity if not rotated).
+
+    `sigmas`: (sigma_x, sigma_y, sigma_z); sigma_x is the gaussian_ellipsoid_sigmax target.
+    `n_particles`, `rng`, `rotated`: as in synth_cube.
+    """
     sx, sy, sz = sigmas
     points = np.stack([
         rng.normal(0, sx, n_particles),
@@ -115,22 +129,44 @@ def synth_ellipsoid(sigmas, n_particles, rng, rotated=False):
 
 
 def _sample_isotropic_directions(n_particles, rng):
+    """n_particles unit vectors, uniform on the sphere (normalized Gaussian draws)."""
     dirs = rng.normal(size=(n_particles, 3))
     dirs /= np.linalg.norm(dirs, axis=1, keepdims=True)
     return dirs
 
 
 def synth_ball(r, n_particles, rng):
+    """Samples a uniformly filled ball of radius r; a radius of r * U^(1/3) gives the uniform volume density.
+
+    Returns the (n_particles, 3) points, unrotated, since a ball is isotropic.
+
+    `r`: the radius, the bounded_ball target.
+    `n_particles`, `rng`: as in synth_cube.
+    """
     dirs = _sample_isotropic_directions(n_particles, rng)
     radii = r * rng.uniform(0.0, 1.0, size=n_particles) ** (1.0 / 3.0)
     return dirs * radii[:, None]
 
 
 def synth_gaussian_ball(sigma, n_particles, rng):
+    """Samples an isotropic 3D Gaussian.
+
+    Returns the (n_particles, 3) points.
+
+    `sigma`: the std on every axis, the gaussian_ball target.
+    `n_particles`, `rng`: as in synth_cube.
+    """
     return rng.normal(0.0, sigma, size=(n_particles, 3))
 
 
 def synth_hard_ellipsoid(semi_axes, n_particles, rng, rotated=False):
+    """Samples a uniformly filled ellipsoid with a hard boundary: a uniform unit ball scaled per axis, which keeps the density uniform.
+
+    Returns (points, R): the (n_particles, 3) points and the rotation applied (the identity if not rotated).
+
+    `semi_axes`: (a, b, c); a is the bounded_ellipsoid_a target.
+    `n_particles`, `rng`, `rotated`: as in synth_cube.
+    """
     a, b, c = semi_axes
     dirs = _sample_isotropic_directions(n_particles, rng)
     radii = rng.uniform(0.0, 1.0, size=n_particles) ** (1.0 / 3.0)
@@ -141,6 +177,13 @@ def synth_hard_ellipsoid(semi_axes, n_particles, rng, rotated=False):
 
 
 def synth_box(semi_edges, n_particles, rng, rotated=False):
+    """Samples the uniformly filled box [-a, a] x [-b, b] x [-c, c].
+
+    Returns (points, R): the (n_particles, 3) points and the rotation applied (the identity if not rotated).
+
+    `semi_edges`: (a, b, c), the half edge lengths; a is the box_a target.
+    `n_particles`, `rng`, `rotated`: as in synth_cube.
+    """
     a, b, c = semi_edges
     points = np.stack([
         rng.uniform(-a, a, n_particles),
@@ -152,7 +195,12 @@ def synth_box(semi_edges, n_particles, rng, rotated=False):
 
 
 def compute_pca_axes(points):
-    """Return (sigmas sorted desc, rotation matrix, centroid)."""
+    """Runs a PCA of one point cloud.
+
+    Returns (sigmas, eigvecs, center): the square roots of the covariance eigenvalues sorted descending, the matching eigenvectors as columns (used as the rotation R), and the centroid.
+
+    `points`: an (n, 3) array.
+    """
     center = points.mean(axis=0)
     centered = points - center
     cov = np.cov(centered.T)
@@ -167,6 +215,13 @@ def compute_pca_axes(points):
 # ---------- geometry helpers ----------
 
 def cube_edges(a, R):
+    """Gives the 12 edges of the cube of edge a, centred at the origin and rotated by R.
+
+    Returns a list of (start, end) vertex pairs.
+
+    `a`: the edge length.
+    `R`: the 3x3 rotation.
+    """
     h = a / 2
     signs = np.array([(sx, sy, sz) for sx in (-1, 1) for sy in (-1, 1) for sz in (-1, 1)])
     verts = (signs * h) @ R.T
@@ -179,7 +234,13 @@ def cube_edges(a, R):
 
 
 def box_edges(semi_edges, R):
-    """Same as cube_edges but each axis has its own half-length."""
+    """Gives the 12 edges of a box, as cube_edges does but with one half-length per axis.
+
+    Returns a list of (start, end) vertex pairs.
+
+    `semi_edges`: (a, b, c), the half edge lengths.
+    `R`: the 3x3 rotation.
+    """
     a, b, c = semi_edges
     signs = np.array([(sx, sy, sz) for sx in (-1, 1) for sy in (-1, 1) for sz in (-1, 1)])
     verts = (signs * np.array([a, b, c])) @ R.T
@@ -192,6 +253,15 @@ def box_edges(semi_edges, R):
 
 
 def ellipsoid_surface(sigmas, R, scale=1.0, n_u=24, n_v=16):
+    """Gives a grid of points on an ellipsoid surface, for plot_wireframe.
+
+    Returns (X, Y, Z), each an (n_u, n_v) array.
+
+    `sigmas`: the three semi-axes, before `scale`.
+    `R`: the 3x3 rotation.
+    `scale`: multiplier on the sigmas (ELLIPSOID_K draws the 2-sigma surface).
+    `n_u`, `n_v`: the number of grid points in azimuth and in polar angle.
+    """
     u = np.linspace(0, 2 * np.pi, n_u)
     v = np.linspace(0, np.pi, n_v)
     sx, sy, sz = (s * scale for s in sigmas)
@@ -204,6 +274,15 @@ def ellipsoid_surface(sigmas, R, scale=1.0, n_u=24, n_v=16):
 
 
 def set_equal_aspect(ax, points, padding=1.15, half_extent=None):
+    """Gives a 3D axes the same range on all three axes, so shapes are not distorted.
+
+    Returns nothing.
+
+    `ax`: the 3D axes.
+    `points`: the points; the range is centred on their bounding box.
+    `padding`: multiplier on half the points' largest extent, used when half_extent is None.
+    `half_extent`: a fixed half-width, e.g. shared by all panels of a figure so their sizes compare; None fits the points.
+    """
     mins = points.min(axis=0)
     maxs = points.max(axis=0)
     centers = (mins + maxs) / 2
@@ -221,17 +300,23 @@ def set_equal_aspect(ax, points, padding=1.15, half_extent=None):
 # ---------- annotation helpers ----------
 
 def draw_cube_length_arrow(ax, a, R, color=ACCENT):
-    """Double-headed arrow parallel to one cube edge, offset OUTSIDE the cube."""
+    """Draws a double-headed arrow labelled a along one cube edge, just outside the cube.
+
+    Returns nothing.
+
+    `ax`: the 3D axes.
+    `a`, `R`: the cube's edge length and rotation.
+    `color`: the color of the arrow and its label.
+    """
     h = a / 2
-    # Place along original +x direction, offset in original -z so it sits
-    # under the cube and is not confused with the wireframe edges themselves.
+    # Along the unrotated +x edge, shifted in unrotated -z so it sits below the cube and is not mistaken for a wireframe edge.
     z_off = a * 0.06
     p_start = R @ np.array([-h, -h, -h - z_off])
     p_end   = R @ np.array([ h, -h, -h - z_off])
     mid = (p_start + p_end) / 2
     half = (p_end - p_start) / 2
 
-    # Two single-headed quivers from the midpoint, opposite directions.
+    # Two single-headed quivers from the midpoint, in opposite directions.
     ax.quiver(*mid, *half,
               color=color, arrow_length_ratio=0.18, linewidth=2)
     ax.quiver(*mid, *(-half),
@@ -245,15 +330,18 @@ def draw_cube_length_arrow(ax, a, R, color=ACCENT):
 
 def draw_principal_axes(ax, sigmas, R, names, scale=1.0, with_values=False,
                         colors=None, label_pad=1.5):
-    """Draw three half-axes from origin and annotate each tip.
+    """Draws the three half-axes as arrows from the origin, each labelled near its tip.
 
-    `names`     : tuple of 3 LaTeX strings used as the label.
-    `scale`     : multiplier on the sigmas (matches the ellipsoid surface scale).
-    `with_values`: if True, append "=value" to each label (using *unscaled* sigma).
-    `colors`    : sequence of 3 colours; defaults to AXIS_COLORS (RGB).
-    `label_pad` : push the text outward by this factor of the arrow length.
-                  Can be a single float (applied to all axes) or a tuple of 3
-                  floats for per-axis control.
+    Returns nothing.
+
+    `ax`: the 3D axes.
+    `sigmas`: the three half-axis lengths, before `scale`; an axis with sigma <= 0 is skipped.
+    `R`: the rotation of the shape.
+    `names`: three LaTeX labels; an empty string draws the arrow without a label.
+    `scale`: multiplier on the sigmas, matching the ellipsoid surface's scale.
+    `with_values`: append "=value" to each label, with the unscaled sigma.
+    `colors`: three colors; defaults to AXIS_COLORS.
+    `label_pad`: puts each label at this multiple of its arrow's shaft vector; one float for all axes, or a tuple of three.
     """
     if colors is None:
         colors = AXIS_COLORS
@@ -265,7 +353,7 @@ def draw_principal_axes(ax, sigmas, R, names, scale=1.0, with_values=False,
         axis_local[i] = sigma * scale
         v = R @ axis_local          # shaft endpoint = parameter value
         shaft_len = np.linalg.norm(v)
-        # Fixed absolute arrowhead length so all three axes look the same
+        # Fixed absolute arrowhead length, so all three axes look the same.
         head_abs = max(sigmas) * scale * 0.12   # 12% of longest axis
         head_ratio = head_abs / (shaft_len + head_abs) if shaft_len > 0 else 0.18
         vq = v + v / shaft_len * head_abs if shaft_len > 0 else v
@@ -280,6 +368,15 @@ def draw_principal_axes(ax, sigmas, R, names, scale=1.0, with_values=False,
 # ---------- gallery builders ----------
 
 def render_cube_sample(ax, a, n_particles, rng, rotated=False, half_extent=None):
+    """Draws one cube sample with its wireframe edges and edge-length arrow, titled with a.
+
+    Returns nothing.
+
+    `ax`: the 3D axes.
+    `a`: the edge length.
+    `n_particles`, `rng`, `rotated`: passed to synth_cube.
+    `half_extent`: the panel's fixed half-width (see set_equal_aspect); None fits the points.
+    """
     points, R = synth_cube(a, n_particles, rng, rotated=rotated)
     ax.scatter(points[:, 0], points[:, 1], points[:, 2], **POINT_KW)
     for p1, p2 in cube_edges(a, R):
@@ -293,24 +390,29 @@ def render_cube_sample(ax, a, n_particles, rng, rotated=False, half_extent=None)
 
 
 def render_ellipsoid_sample(ax, sigmas, n_particles, rng, rotated=False, half_extent=None):
-    """Point cloud is a genuine 3-D anisotropic Gaussian ellipsoid, but only
-    sigma_x (dim 0) is the gaussian_ellipsoid_sigmax proxy's 1-target —
-    sigma_y/z are shape geometry only, so their axes are drawn muted."""
+    """Draws one Gaussian-ellipsoid sample with its 2-sigma wireframe and half-axes, titled with the target sigma_x and the two shape sigmas.
+
+    The cloud is genuinely 3D and anisotropic, but only sigma_x (dim 0) is the gaussian_ellipsoid_sigmax target, so the sigma_y and sigma_z axes are muted.
+
+    Returns nothing.
+
+    `ax`: the 3D axes.
+    `sigmas`: (sigma_x, sigma_y, sigma_z).
+    `n_particles`, `rng`, `rotated`: passed to synth_ellipsoid.
+    `half_extent`: the panel's fixed half-width; None uses 1.2 x the 2-sigma longest axis.
+    """
     points, R = synth_ellipsoid(sigmas, n_particles, rng, rotated=rotated)
     ax.scatter(points[:, 0], points[:, 1], points[:, 2], **POINT_KW)
     X, Y, Z = ellipsoid_surface(sigmas, R, scale=ELLIPSOID_K)
     ax.plot_wireframe(X, Y, Z, color=WIREFRAME_COLOR, alpha=0.28, linewidth=0.6)
-    # Ellipsoid axes are already explicit in the title; keep the in-plot labels
-    # purely directional so they don't pile up at the origin. Only sigma_x is
-    # accented (it's the actual training target); y/z are muted.
+    # The values are in the title, so the in-plot labels carry names only and do not pile up at the origin.
+    # Only sigma_x, the target, is accented; sigma_y and sigma_z are muted.
     draw_principal_axes(ax, sigmas, R,
                         names=(r'$2\sigma_x$', r'$2\sigma_y$', r'$2\sigma_z$'),
                         scale=ELLIPSOID_K, with_values=False,
                         colors=(ACCENT, MUTED_AXIS_COLOR, MUTED_AXIS_COLOR),
                         label_pad=(1.4, 3.5, 2.0))
-    # Long Gaussian tails would otherwise blow up the bounding box and shrink
-    # the 2-sigma wireframe to a dot. Tie the box to max(sigma)*ELLIPSOID_K so
-    # the wireframe fills most of the panel regardless of axis ratio.
+    # The box is sized from the 2-sigma longest axis, not from the points, whose long Gaussian tails would blow it up and shrink the wireframe to a dot.
     if half_extent is None:
         half_extent = max(sigmas) * ELLIPSOID_K * 1.2
     set_equal_aspect(ax, points, half_extent=half_extent)
@@ -325,8 +427,7 @@ def render_ellipsoid_sample(ax, sigmas, n_particles, rng, rotated=False, half_ex
 
 def _draw_radius_arrow(ax, length, label, color=ACCENT, axis_dir=np.array([1.0, 0.0, 0.0]),
                        text_pad=1.25):
-    """Quiver from origin along +axis_dir of given length, with annotated label.
-    The shaft length equals `length`; the arrowhead extends beyond it."""
+    """Labelled arrow from the origin along axis_dir whose shaft is `length` long, with the head beyond it."""
     v = axis_dir * length           # shaft endpoint = parameter value
     head_ratio = 0.12
     vq = v / (1 - head_ratio)      # total quiver so shaft = length
@@ -337,9 +438,18 @@ def _draw_radius_arrow(ax, length, label, color=ACCENT, axis_dir=np.array([1.0, 
 
 
 def render_ball_sample(ax, r, n_particles, rng, half_extent=None):
+    """Draws one bounded-ball sample with its boundary sphere and radius arrow, titled with r.
+
+    Returns nothing.
+
+    `ax`: the 3D axes.
+    `r`: the radius.
+    `n_particles`, `rng`: passed to synth_ball.
+    `half_extent`: the panel's fixed half-width; None uses 1.2 r.
+    """
     points = synth_ball(r, n_particles, rng)
     ax.scatter(points[:, 0], points[:, 1], points[:, 2], **POINT_KW)
-    # Wireframe sphere at radius r (use ellipsoid_surface with equal sigmas).
+    # Wireframe sphere at radius r (ellipsoid_surface with equal sigmas).
     X, Y, Z = ellipsoid_surface((r, r, r), np.eye(3), scale=1.0)
     ax.plot_wireframe(X, Y, Z, color=WIREFRAME_COLOR, alpha=0.28, linewidth=0.6)
     _draw_radius_arrow(ax, r, 'r', text_pad=2.0)
@@ -352,9 +462,18 @@ def render_ball_sample(ax, r, n_particles, rng, half_extent=None):
 
 
 def render_gaussian_ball_sample(ax, sigma, n_particles, rng, half_extent=None):
+    """Draws one Gaussian-ball sample with its 2-sigma sphere and radius arrow, titled with sigma.
+
+    Returns nothing.
+
+    `ax`: the 3D axes.
+    `sigma`: the std on every axis.
+    `n_particles`, `rng`: passed to synth_gaussian_ball.
+    `half_extent`: the panel's fixed half-width; None uses 1.4 x the 2-sigma radius.
+    """
     points = synth_gaussian_ball(sigma, n_particles, rng)
     ax.scatter(points[:, 0], points[:, 1], points[:, 2], **POINT_KW)
-    # Wireframe sphere at 2-sigma so it stays comparable to the ellipsoid panels.
+    # Wireframe sphere at 2-sigma, comparable to the ellipsoid panels.
     X, Y, Z = ellipsoid_surface((sigma, sigma, sigma), np.eye(3), scale=ELLIPSOID_K)
     ax.plot_wireframe(X, Y, Z, color=WIREFRAME_COLOR, alpha=0.28, linewidth=0.6)
     _draw_radius_arrow(ax, sigma * ELLIPSOID_K, r'$2\sigma$', text_pad=2.0)
@@ -367,13 +486,20 @@ def render_gaussian_ball_sample(ax, sigma, n_particles, rng, half_extent=None):
 
 
 def render_hard_ellipsoid_sample(ax, semi_axes, n_particles, rng, rotated=False, half_extent=None):
-    """Point cloud is a genuine 3-D anisotropic hard-boundary ellipsoid, but
-    only 'a' (dim 0, the largest semi-axis) is the bounded_ellipsoid_a proxy's
-    1-target — b/c are shape geometry only, so their axes are muted."""
+    """Draws one bounded-ellipsoid sample with its boundary wireframe and semi-axes, titled with the target a and the shape values b and c.
+
+    The cloud is genuinely 3D and anisotropic, but only a (dim 0, the longest semi-axis) is the bounded_ellipsoid_a target, so the b and c axes are muted.
+
+    Returns nothing.
+
+    `ax`: the 3D axes.
+    `semi_axes`: (a, b, c).
+    `n_particles`, `rng`, `rotated`: passed to synth_hard_ellipsoid.
+    `half_extent`: the panel's fixed half-width; None uses 1.2 x the longest semi-axis.
+    """
     points, R = synth_hard_ellipsoid(semi_axes, n_particles, rng, rotated=rotated)
     ax.scatter(points[:, 0], points[:, 1], points[:, 2], **POINT_KW)
-    # Wireframe at exactly the boundary (scale=1.0): the points are uniformly
-    # distributed all the way out to that surface, so this is the *real* edge.
+    # Wireframe at the boundary itself (scale=1.0), since the points fill the ellipsoid uniformly up to it.
     X, Y, Z = ellipsoid_surface(semi_axes, R, scale=1.0)
     ax.plot_wireframe(X, Y, Z, color=WIREFRAME_COLOR, alpha=0.28, linewidth=0.6)
     draw_principal_axes(ax, semi_axes, R,
@@ -394,9 +520,17 @@ def render_hard_ellipsoid_sample(ax, semi_axes, n_particles, rng, rotated=False,
 
 
 def render_box_sample(ax, semi_edges, n_particles, rng, rotated=False, half_extent=None):
-    """Point cloud is a genuine 3-D anisotropic box, but only 'a' (dim 0, the
-    largest semi-edge-length) is the box_a proxy's 1-target — b/c are
-    shape geometry only, so their axes are muted."""
+    """Draws one box sample with its wireframe edges and semi-edges, titled with the target a and the shape values b and c.
+
+    The cloud is genuinely 3D and anisotropic, but only a (dim 0, the longest semi-edge) is the box_a target, so the b and c axes are muted.
+
+    Returns nothing.
+
+    `ax`: the 3D axes.
+    `semi_edges`: (a, b, c), the half edge lengths.
+    `n_particles`, `rng`, `rotated`: passed to synth_box.
+    `half_extent`: the panel's fixed half-width; None uses 1.2 x the longest semi-edge.
+    """
     points, R = synth_box(semi_edges, n_particles, rng, rotated=rotated)
     ax.scatter(points[:, 0], points[:, 1], points[:, 2], **POINT_KW)
     for p1, p2 in box_edges(semi_edges, R):
@@ -420,21 +554,24 @@ def render_box_sample(ax, semi_edges, n_particles, rng, rotated=False, half_exte
 
 
 def render_eigen_sample(ax, points, stream_idx):
-    """Point cloud is a real stream; PCA gives 3 eigenvalues, but only
-    lambda1 (largest, dim 0 — compute_pca_axes sorts descending) is the
-    stream_eigenvalues_lambda1 proxy's 1-target. lambda2/3 are shape
-    context only, so their axes are drawn muted."""
+    """Draws one real stream, centred, with its PCA 2-sigma ellipsoid and principal axes, titled with the target sqrt(lambda1) and the two shape values in kpc.
+
+    PCA gives three eigenvalues, but only lambda1 (the largest, dim 0, since compute_pca_axes sorts descending) is the eigen proxy's target, so the lambda2 and lambda3 axes are muted.
+
+    Returns nothing.
+
+    `ax`: the 3D axes.
+    `points`: the stream's (n, 3) raw coordinates, in kpc.
+    `stream_idx`: the stream's index in the raw file, for the title.
+    """
     sigmas, R, center = compute_pca_axes(points)
     pts_c = points - center
     ax.scatter(pts_c[:, 0], pts_c[:, 1], pts_c[:, 2], **POINT_KW)
     X, Y, Z = ellipsoid_surface(sigmas, R, scale=ELLIPSOID_K)
     ax.plot_wireframe(X, Y, Z, color=WIREFRAME_COLOR, alpha=0.28, linewidth=0.6)
-    # Only the target axis is annotated. The lambda2/3 arrows stay (they show
-    # the shape), but their text is dropped: label_pad is a MULTIPLE of the
-    # arrow vector, and those two arrows are short, so both texts landed near
-    # the origin -- which one you could actually read came down to how close
-    # lambda2 and lambda3 happened to be for that particular stream. Their
-    # values are already in the panel title.
+    # Only the target axis is labelled: the lambda2 and lambda3 arrows stay, to show the shape, but without text.
+    # label_pad is a multiple of the arrow vector, so on those two short arrows both labels landed near the origin and overlapped.
+    # Their values are in the panel title.
     draw_principal_axes(
         ax, sigmas, R,
         names=(r'$2\sqrt{\lambda_1}$', '', ''),
@@ -442,16 +579,12 @@ def render_eigen_sample(ax, points, stream_idx):
         colors=(ACCENT, MUTED_AXIS_COLOR, MUTED_AXIS_COLOR),
         label_pad=(1.5, 4.0, 3.0),
     )
-    # Real streams are curved/non-Gaussian; their spatial extent can exceed
-    # the PCA 2-sigma ellipsoid. Fit the box to the actual point cloud so
-    # the full stream stays visible.
+    # Real streams are curved and non-Gaussian and can reach beyond the 2-sigma ellipsoid, so the box is fitted to the points to keep the whole stream visible.
     set_equal_aspect(ax, pts_c, padding=1.05)
     ax.view_init(**VIEW_INIT)
     ax.set_xticks([]); ax.set_yticks([]); ax.set_zticks([])
-    # Unlike the six synthetic proxies these are real streams, so the numbers
-    # carry a unit (kpc) -- same convention as src/visualization.py.
-    # Two lines: a single line with the stream id, the target and both shape
-    # values is wider than the 4-inch panel, so neighbouring titles collide.
+    # Unlike the synthetic proxies, real streams carry a unit, kpc, as in src/visualization.py.
+    # Two lines, because one line with the stream id, the target and both shape values is wider than the 4-inch panel and collides with the neighbouring title.
     ax.set_title(
         rf'Stream {stream_idx}' '\n'
         rf'target: $\sqrt{{\lambda_1}} = {sigmas[0]:.2f}$ kpc'
@@ -462,6 +595,20 @@ def render_eigen_sample(ax, points, stream_idx):
 
 def make_gallery(proxy_type, num_samples, output_path,
                  input_raw=None, num_particles=4000, seed=0, rotated=False):
+    """Draws one proxy's gallery figure, num_samples panels side by side.
+
+    The synthetic panels share one bounding box, so their sizes compare; each eigen panel is fitted to its own stream.
+
+    Returns nothing; writes output_path and a PDF of the same name next to it.
+
+    `proxy_type`: one of ALL_PROXY_TYPES except 'combined'.
+    `num_samples`: the number of panels; the anisotropic proxies have four curated shapes, so they show at most four.
+    `output_path`: the PNG path.
+    `input_raw`: the raw HDF5 with Cartesian_data, required for 'eigen', which shows num_samples streams evenly spaced through it.
+    `num_particles`: the points per synthetic sample.
+    `seed`: the seed of the sampling rng.
+    `rotated`: rotate the cube and the anisotropic shapes randomly, as training does.
+    """
     rng = np.random.default_rng(seed)
 
     if proxy_type == 'cube':
@@ -551,10 +698,8 @@ def make_gallery(proxy_type, num_samples, output_path,
     else:
         raise ValueError(f"unknown proxy_type: {proxy_type}")
 
-    # eigen gets no suptitle: every symbol in target_desc already appears in
-    # both panel titles (with values), and in the paper this figure carries a
-    # real \caption on top of that. Skipping it also frees the vertical space
-    # that used to sit between the panel titles and the 3-D boxes.
+    # eigen gets no suptitle: its panel titles already give every symbol with its value, and in the paper the figure has a caption.
+    # Without the suptitle the panels can also start higher (top=0.94 instead of 0.86).
     if proxy_type != 'eigen':
         fig.suptitle(f"{_PROXY_DISPLAY_NAMES[proxy_type]}    "
                      f"target: {_TARGET_DESCRIPTIONS[proxy_type]}", fontsize=14)
@@ -570,16 +715,21 @@ def make_gallery(proxy_type, num_samples, output_path,
 # ---------- Combined 3×2 gallery ----------
 
 def make_combined_gallery(output_path, num_particles=4000, seed=0, rotated=True):
-    """3×2 publication figure: rows = isotropic vs anisotropic target.
+    """Draws the combined publication figure, the six synthetic proxies in 2 rows (isotropic, anisotropic) x 3 columns.
 
-    Only the isotropic/anisotropic split is emphasized (that's the axis with
-    a clear performance difference); boundary type (sharp/smooth/soft) is no
-    longer called out — it's still visually present column-to-column (each
-    column pairs shape-analogous proxies), just not annotated or arrowed.
+    Only the isotropic/anisotropic split is labelled, because it is the one with a clear performance difference.
+    Each column pairs shape-analogous proxies, so the boundary type (sharp, smooth, soft) is still visible from column to column, just not annotated.
 
     Layout:
         row 0 (Isotropic / 1D target): Cube, Bounded Ball, Gaussian Ball
         row 1 (Anisotropic / 1D target): Box, Bounded Ellipsoid, Gaussian Ellipsoid
+
+    Returns nothing; writes output_path and a PDF of the same name next to it.
+
+    `output_path`: the PNG path.
+    `num_particles`: the points per sample.
+    `seed`: the seed of the sampling rng.
+    `rotated`: rotate the cube and the anisotropic shapes randomly, as training does.
     """
     rng = np.random.default_rng(seed)
 
@@ -590,7 +740,7 @@ def make_combined_gallery(output_path, num_particles=4000, seed=0, rotated=True)
     HELL_AXES     = (10.0, 5.0, 2.0)
     GBALL_SIGMA   = 5.0    # 2σ wireframe ≈ 10
     GELL_SIGMAS   = (10.0, 5.0, 2.0)  # 2σ: 20/10/4 — within training range
-    HALF_EXTENT   = 22.0   # unified bounding box half-width [kpc]
+    HALF_EXTENT   = 22.0   # shared bounding-box half-width of every panel, in the proxies' unitless coordinates
 
     ARROW_COLOR = '#555555'
     PANEL_NAMES = {
@@ -601,9 +751,7 @@ def make_combined_gallery(output_path, num_particles=4000, seed=0, rotated=True)
         'gaussian_ball':            'Gaussian Ball',
         'gaussian_ellipsoid_sigmax': 'Gaussian Ellipsoid',
     }
-    # All six proxies shown here are 1-target; the row distinction is isotropic
-    # (target IS the whole shape) vs anisotropic (target is one of 3 axes,
-    # the other two are shape geometry only, shown muted in each panel).
+    # All six proxies are 1-target: in the isotropic row the target sets the whole shape, in the anisotropic row it is one of three axes and the other two are muted.
     ROW_LABELS  = ['1D target\nIsotropic', '1D target\nAnisotropic']
     GRID = [('cube',  'bounded_ball',          'gaussian_ball'),
             ('box_a', 'bounded_ellipsoid_a',   'gaussian_ellipsoid_sigmax')]
@@ -670,6 +818,10 @@ def make_combined_gallery(output_path, num_particles=4000, seed=0, rotated=True)
 # ---------- CLI ----------
 
 def parse_args():
+    """Parses the command line.
+
+    Returns the argparse Namespace.
+    """
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument(
         '--proxy_type', nargs='+', required=True, metavar='TYPE',
@@ -690,6 +842,10 @@ def parse_args():
 
 
 def main():
+    """Draws the figure of every requested --proxy_type into --output_dir.
+
+    Returns nothing; skips eigen when --input_raw is missing and exits on an unknown type.
+    """
     args = parse_args()
     os.makedirs(args.output_dir, exist_ok=True)
 

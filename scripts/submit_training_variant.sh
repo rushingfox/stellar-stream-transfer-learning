@@ -2,25 +2,14 @@
 
 set -euo pipefail
 
-variant=${1:?Error: please provide variant deepsets/deepsets_256/deepsets_128}
+variant=${1:?Error: please provide variant deepsets}
 
-# deepsets (hidden 1024, 1,252,481 params) is the default DeepSets; the
-# narrower widths keep a _<width> suffix.
+# deepsets: hidden 1024, 1,252,481 params.
 case "$variant" in
     deepsets)
         model_dir="deepsets"
         run_script="run_deepsets.sh"
         names_prefix="ds"
-        ;;
-    deepsets_256)
-        model_dir="deepsets_256"
-        run_script="run_deepsets_256.sh"
-        names_prefix="ds256"
-        ;;
-    deepsets_128)
-        model_dir="deepsets_128"
-        run_script="run_deepsets_128.sh"
-        names_prefix="ds128"
         ;;
     *)
         echo "Error: unsupported variant='$variant'." >&2

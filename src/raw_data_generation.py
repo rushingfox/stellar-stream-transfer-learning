@@ -1,10 +1,6 @@
-"""
-raw_data_generation.py
---------------
-Command-line script for generating synthetic stellar stream datasets.
-Converted from dataset_gen_v6.ipynb.
-Parallelised with multiprocessing.Pool for NERSC CPU nodes; the parallel loop
-and the HDF5 writer live in stream_generation_common.py.
+"""Generates the synthetic stellar-stream dataset of the progenitor-mass task, whose target is log10 of the progenitor's stellar mass.
+
+It runs in parallel with multiprocessing.Pool on NERSC CPU nodes; the parallel loop and the HDF5 writer live in stream_generation_common.py.
 
 Usage example:
     python raw_data_generation.py --num_streams 1000 --output prog_mass_reg_dataset_1000.h5
@@ -16,7 +12,6 @@ print = functools.partial(print, flush=True)
 import argparse
 import math
 import random
-import sys
 
 import astropy.coordinates as coord
 import astropy.units as u
@@ -39,7 +34,7 @@ from stream_generation_common import (
     stream_to_df,
 )
 
-# multiprocessing — use 'spawn' to avoid issues with C extensions on Linux
+# Workers are spawned rather than forked, to avoid issues with C extensions on Linux.
 import multiprocessing as mp
 mp.set_start_method("spawn", force=True)
 
@@ -49,6 +44,12 @@ mp.set_start_method("spawn", force=True)
 # ---------------------------------------------------------------------------
 
 def parse_args(argv=None):
+    """Parses the command line.
+
+    Returns the argparse Namespace.
+
+    `argv`: the argument list, or None for sys.argv.
+    """
     parser = argparse.ArgumentParser(
         description="Generate synthetic stellar stream datasets.",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
@@ -102,7 +103,10 @@ def parse_args(argv=None):
 # ---------------------------------------------------------------------------
 
 def setup_globals():
-    """Initialise the galactocentric frame, cosmology and MW potential."""
+    """Sets astropy's Galactocentric frame defaults to v4.0 and builds the cosmology and the Milky Way potential.
+
+    Returns (cosmo, mw): colossus's planck18 cosmology and gala's BovyMWPotential2014.
+    """
     _ = coord.galactocentric_frame_defaults.set("v4.0")
     cosmo = cosmology.setCosmology("planck18", persistence="")
     mw = gp.BovyMWPotential2014(units=galactic)
@@ -114,6 +118,13 @@ def setup_globals():
 # ---------------------------------------------------------------------------
 
 class ProgenitorParams:
+    """Initial conditions, stellar mass and integration times of one stream's progenitor, as astropy quantities.
+
+    `ra`, `dec`, `distance`: the progenitor's ICRS position.
+    `pm_ra_cosdec`, `pm_dec`, `radial_velocity`: its ICRS proper motions and line-of-sight velocity.
+    `mstar`: its stellar mass.
+    `t1`, `t2`, `dt`: the start, end and step of the integration.
+    """
     def __init__(
         self,
         ra, dec, distance,
@@ -132,9 +143,11 @@ class ProgenitorParams:
         self.dt = dt
 
     def __iter__(self):
+        """Iterates over (attribute name, value) pairs, e.g. ('mstar', mstar)."""
         return iter(self.__dict__.items())
 
     def to_dict(self):
+        """The attributes as {name: value}."""
         return {key: value for key, value in self}
 
 
@@ -143,8 +156,13 @@ class ProgenitorParams:
 # ---------------------------------------------------------------------------
 
 def SMHM(Mstar_in_Msun, smhm_model: str = "FIRE_LatteELVIS"):
-    """Stellar-to-Halo Mass Relation."""
-    # Based on the FIRE: Latte/ELVIS fitting line in fig 2(a) of https://arxiv.org/pdf/2206.05295
+    """Stellar-to-halo mass relation: the halo mass M200c of a given stellar mass.
+
+    Returns M200c in Msun, interpolated linearly in log-log (and extrapolated) from the table ./<smhm_model>_SMHM.
+
+    `Mstar_in_Msun`: the stellar mass in Msun.
+    `smhm_model`: the table's name without the '_SMHM' suffix; the default is the FIRE Latte/ELVIS fit in Fig. 2(a) of https://arxiv.org/pdf/2206.05295.
+    """
     data = np.genfromtxt(f"./{smhm_model}_SMHM")
     log_Mstar = data[:, 0]
     log_Mhalo = data[:, 1]
@@ -154,7 +172,14 @@ def SMHM(Mstar_in_Msun, smhm_model: str = "FIRE_LatteELVIS"):
 
 
 def SSHS(Mhalo_200c_in_Msun, z, cosmo):
-    """Stellar-Size Halo-Size relation."""
+    """Stellar-size halo-size relation: the stellar half-light radius of a halo.
+
+    Returns R_e = 0.02 (1 + z)^-0.2 (C_vir / 10)^-0.7 R_vir in kpc, with the Ludlow et al. 2016 concentration converted from the 200c to the virial definition.
+
+    `Mhalo_200c_in_Msun`: the halo mass M200c in Msun.
+    `z`: the redshift.
+    `cosmo`: the colossus cosmology, for h = H0 / 100, since colossus takes masses in Msun/h and returns radii in kpc/h.
+    """
     C_200c = concentration.modelLudlow16(
         Mhalo_200c_in_Msun * (cosmo.H0 / 100), z=z
     )[0]
@@ -167,7 +192,13 @@ def SSHS(Mhalo_200c_in_Msun, z, cosmo):
 
 
 def Re_to_Rscale(Re_in_kpc, profile: str = "hernquist"):
-    """Convert half-light radius to scale radius for a given profile."""
+    """Converts a half-light radius to the scale radius of a Plummer or Hernquist profile.
+
+    Returns the scale radius in kpc, R_e sqrt(2^(2/3) - 1) for Plummer and R_e / (1 + sqrt(2)) for Hernquist; raises ValueError for any other profile.
+
+    `Re_in_kpc`: the half-light radius in kpc.
+    `profile`: 'plummer' or 'hernquist'.
+    """
     if profile == "plummer":
         return Re_in_kpc * math.sqrt(2 ** (2 / 3) - 1)
     elif profile == "hernquist":
@@ -179,6 +210,12 @@ def Re_to_Rscale(Re_in_kpc, profile: str = "hernquist"):
 
 
 def max_distance(x, y, z):
+    """Computes the largest distance between any two of the points.
+
+    Returns that distance, in the unit of the coordinates.
+
+    `x`, `y`, `z`: the points' coordinates.
+    """
     coords = np.column_stack([x, y, z])
     return np.max(pdist(coords))
 
@@ -188,6 +225,14 @@ def max_distance(x, y, z):
 # ---------------------------------------------------------------------------
 
 def compute_orbit(progenitor_params: ProgenitorParams, mw, whole_time_space: bool = False):
+    """Integrates the progenitor's orbit in the Milky Way potential.
+
+    Returns the gala Orbit, from t1 to t2 if whole_time_space, else from -1.5 Gyr to 0, with step dt.
+
+    `progenitor_params`: the progenitor's ICRS initial conditions and times.
+    `mw`: the Milky Way potential.
+    `whole_time_space`: integrate over the progenitor's own t1 to t2 instead of the fixed -1.5 Gyr to 0.
+    """
     icrs = coord.ICRS(
         ra=progenitor_params.ra,
         dec=progenitor_params.dec,
@@ -227,6 +272,22 @@ def stream_gen(
     star_pot_form: str = "hernquist",
     attempt_seed: int = 0,
 ):
+    """Generates the mock stream of one progenitor in the Milky Way potential.
+
+    Returns (stream_df, prog_df): the per-particle table, and a one-row table of the progenitor (progenitor_type 'DG', stream_id, the orbit's pericenter, apocenter and eccentricity, Criterion_2, and every ProgenitorParams field as progenitor_<name>).
+
+    The progenitor potential is an NFW halo plus a stellar Plummer or Hernquist profile: the halo's M200c comes from SMHM and its concentration from Ludlow et al. 2016 at the redshift of lookback time -t1, and the stellar scale radius from the SSHS half-light radius.
+    Criterion_2 is 1 if the stream's largest pairwise particle distance exceeds 120 kpc, else 0.
+
+    `progenitor_params`: the progenitor's initial conditions, stellar mass and times.
+    `stream_id`: the id written in both tables.
+    `orbit`: the progenitor's orbit from compute_orbit, for its pericenter, apocenter and eccentricity.
+    `mw`: the Milky Way potential.
+    `cosmo`: the colossus cosmology.
+    `smhm_model`: the SMHM table's name (see SMHM).
+    `star_pot_form`: the stellar profile, 'hernquist' or 'plummer'.
+    `attempt_seed`: seeds the stream's particle release.
+    """
     icrs = coord.ICRS(
         ra=progenitor_params.ra,
         dec=progenitor_params.dec,
@@ -292,26 +353,19 @@ def stream_gen(
 # ---------------------------------------------------------------------------
 
 def _try_generate_one(task):
-    """
-    Attempt to generate one stream.
+    """Draws one progenitor and generates its stream, in a worker process.
 
-    Parameters
-    ----------
-    task : tuple
-        (attempt_seed, smhm_model, star_pot_form)
+    Returns (stream_df, prog_df, info_str) for an accepted stream; None to skip it (NaN orbit, pericenter above 100 kpc, Criterion_2 failed, or gala's "Larger nmax is needed" error).
 
-    Returns
-    -------
-    (stream_df, prog_df, info_str)  on success
-    None                            on skip
+    `task`: (attempt_seed, smhm_model, star_pot_form), from seed_iter.
     """
     attempt_seed, smhm_model, star_pot_form = task
 
-    # Each worker gets its own independent RNG state
+    # Every attempt reseeds the RNGs with its own seed, so its draws depend only on that seed.
     random.seed(attempt_seed)
     np.random.seed(attempt_seed % (2**32))   # numpy seed must be < 2^32
 
-    # Re-initialise gala/astropy objects inside the subprocess
+    # The gala/astropy objects are rebuilt inside the subprocess.
     cosmo, mw = setup_globals()
 
     try:
@@ -408,6 +462,12 @@ _PROG_UNITS = {
 # ---------------------------------------------------------------------------
 
 def generate_dataset(args):
+    """Generates args.num_streams accepted streams, with num_streams as the base seed.
+
+    Returns nothing; writes args.output through save_dataset.
+
+    `args`: the parsed command line, from parse_args.
+    """
     base_seed = args.num_streams
     random.seed(base_seed)
     np.random.seed(base_seed)

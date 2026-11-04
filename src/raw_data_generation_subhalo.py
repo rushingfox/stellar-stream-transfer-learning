@@ -1,19 +1,9 @@
-"""
-raw_data_generation_subhalo.py
-------------------------------
-Command-line script for generating GD-1-like stellar streams perturbed by a
-dark-matter subhalo, for regressing the subhalo's mass enclosed within 10 pc.
+"""Generates the subhalo task's dataset: GD-1-like stellar streams perturbed by a dark-matter subhalo, to regress the subhalo's mass within 10 pc.
 
-Every stream shares one fixed encounter geometry: the same progenitor orbit and
-the same subhalo orbit, with the impact 495 Myr ago (the impact time of the
-fiducial GD-1 spur-and-gap model of Bonaca et al. 2019, arXiv:1811.03631), so
-every stream is perturbed. Only the subhalo's Hernquist mass M and scale radius
-r_s vary, log-uniformly in [10^6, 10^7.5] Msun and [1, 10^1.5] pc. The label is
-log10 M(<10 pc), with M(<r) = M r^2 / (r + r_s)^2 for a Hernquist profile; M and
-r_s are stored alongside it in pert_properties.
-
-The parallel loop and the HDF5 layout (shared with raw_data_generation.py)
-live in stream_generation_common.py.
+Every stream shares one fixed encounter geometry, the same progenitor orbit and the same subhalo orbit, with the impact 495 Myr ago (the impact time of the fiducial GD-1 spur-and-gap model of Bonaca et al. 2019, arXiv:1811.03631), so every stream is perturbed.
+Only the subhalo's Hernquist mass M and scale radius r_s vary, log-uniformly in [10^6, 10^7.5] Msun and [1, 10^1.5] pc.
+The target is log10 M(<10 pc), with M(<r) = M r^2 / (r + r_s)^2 for a Hernquist profile; M and r_s are stored alongside it in pert_properties.
+The parallel loop and the HDF5 layout (shared with raw_data_generation.py) live in stream_generation_common.py.
 
 Usage example:
     python raw_data_generation_subhalo.py --num_streams 1000 --output subhalo_reg_dataset_1000.h5
@@ -42,20 +32,18 @@ from stream_generation_common import (
     stream_to_df,
 )
 
-# multiprocessing — use 'spawn' to avoid issues with C extensions on Linux
+# Workers are spawned rather than forked, to avoid issues with C extensions on Linux.
 import multiprocessing as mp
 mp.set_start_method("spawn", force=True)
 
 
-# Added to num_streams to form the base seed, so this dataset's seeds never
-# coincide with those of the progenitor-mass dataset of the same size.
+# Added to num_streams to form the base seed, so this dataset's seeds never coincide with those of the progenitor-mass dataset of the same size.
 SEED_OFFSET = 1_000_000
 
 T_START  = -3.0 * u.Gyr
 T_IMPACT = -495 * u.Myr
-# 2000 release steps x 2 tails = 4000 particles per stream, the same count as
-# the progenitor-mass dataset. gala integrates mock streams with the adaptive
-# DOP853 integrator, so dt sets the release cadence, not the integration accuracy.
+# 2000 release steps x 2 tails = 4000 particles per stream, the same count as the progenitor-mass dataset.
+# gala integrates mock streams with the adaptive DOP853 integrator, so dt sets the release cadence, not the integration accuracy.
 DT = 1.5 * u.Myr
 
 PROG_MASS = 2.5e4 * u.Msun
@@ -71,6 +59,12 @@ ENCLOSED_RADIUS_PC  = 10.0
 # ---------------------------------------------------------------------------
 
 def parse_args(argv=None):
+    """Parses the command line.
+
+    Returns the argparse Namespace.
+
+    `argv`: the argument list, or None for sys.argv.
+    """
     parser = argparse.ArgumentParser(
         description="Generate subhalo-perturbed GD-1-like stream datasets.",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
@@ -110,8 +104,10 @@ def parse_args(argv=None):
 # ---------------------------------------------------------------------------
 
 def setup_globals():
-    """Spherical logarithmic MW potential and the Galactocentric frame used for
-    the ICRS observables."""
+    """Builds the Milky Way potential and the Galactocentric frame of the subhalo task.
+
+    Returns (ham, gc_frame): the Hamiltonian of a spherical logarithmic potential (v_c = 225 km/s, r_h = 0), and the Galactocentric frame (galcen_distance 8 kpc, z_sun 0) used for the ICRS observables.
+    """
     ham = gp.Hamiltonian(gp.LogarithmicPotential(
         v_c=225 * u.km / u.s, r_h=0 * u.kpc, q1=1, q2=1, q3=1, units=galactic
     ))
@@ -124,7 +120,14 @@ def setup_globals():
 # ---------------------------------------------------------------------------
 
 def hernquist_enclosed_mass(mass, r_s, r):
-    """Mass of a Hernquist sphere (total mass, scale radius r_s) within radius r."""
+    """Computes the mass of a Hernquist sphere within radius r, M r^2 / (r + r_s)^2.
+
+    Returns the enclosed mass, in the unit of `mass`.
+
+    `mass`: the total mass M.
+    `r_s`: the scale radius.
+    `r`: the radius, in the unit of r_s.
+    """
     return mass * r**2 / (r + r_s) ** 2
 
 
@@ -133,8 +136,15 @@ def hernquist_enclosed_mass(mass, r_s, r):
 # ---------------------------------------------------------------------------
 
 def stream_gen(ham, pert_mass, pert_rs, attempt_seed):
-    """Mock stream of the fixed GD-1-like progenitor, perturbed by a Hernquist
-    subhalo of mass pert_mass [Msun] and scale radius pert_rs [pc]."""
+    """Generates the mock stream of the fixed GD-1-like progenitor, perturbed by a Hernquist subhalo.
+
+    Returns the gala mock stream, run from T_START to 0 with release step DT.
+
+    `ham`: the Milky Way Hamiltonian, from setup_globals.
+    `pert_mass`: the subhalo's total mass in Msun.
+    `pert_rs`: the subhalo's scale radius in pc.
+    `attempt_seed`: seeds the stream's particle release.
+    """
     prog_w0 = gd.PhaseSpacePosition(
         pos=[-19.36473268, -7.23486128, 5.02312534] * u.kpc,
         vel=[0.07986908, -0.12925221, -0.12822027] * u.kpc / u.Myr,
@@ -172,26 +182,19 @@ def stream_gen(ham, pert_mass, pert_rs, attempt_seed):
 # ---------------------------------------------------------------------------
 
 def _try_generate_one(task):
-    """
-    Attempt to generate one stream.
+    """Draws one subhalo and generates its perturbed stream, in a worker process.
 
-    Parameters
-    ----------
-    task : tuple
-        (attempt_seed,)
+    Returns (stream_df, pert_df, info_str); None to skip the attempt on gala's "Larger nmax is needed" error.
 
-    Returns
-    -------
-    (stream_df, pert_df, info_str)  on success
-    None                            on skip
+    `task`: (attempt_seed,), from seed_iter.
     """
     (attempt_seed,) = task
 
-    # Each worker gets its own independent RNG state
+    # Every attempt reseeds the RNGs with its own seed, so its draws depend only on that seed.
     random.seed(attempt_seed)
     np.random.seed(attempt_seed % (2**32))   # numpy seed must be < 2^32
 
-    # Re-initialise gala/astropy objects inside the subprocess
+    # The gala/astropy objects are rebuilt inside the subprocess.
     ham, gc_frame = setup_globals()
 
     pert_mass = 10 ** random.uniform(*LOG_PERT_MASS_RANGE)   # Msun
@@ -239,6 +242,12 @@ _PERT_UNITS = {
 # ---------------------------------------------------------------------------
 
 def generate_dataset(args):
+    """Generates args.num_streams streams, with num_streams + SEED_OFFSET as the base seed.
+
+    Returns nothing; writes args.output through save_dataset.
+
+    `args`: the parsed command line, from parse_args.
+    """
     base_seed = args.num_streams + SEED_OFFSET
     num_workers = resolve_num_workers(args.num_workers)
 

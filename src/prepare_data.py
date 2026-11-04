@@ -1,8 +1,12 @@
+"""Prepares one dataset's training data: the real streams or a synthesized proxy for OmniLearned, or the real streams for DeepSets.
+
+The OmniLearned data is split 3:1:1 into train/val/test in stream order, with inputs normalized and targets z-scored with train-split statistics (the real streams' test target stays raw).
+It is run by scripts/prepare_data_omnilearned.sh, scripts/prepare_data_proxy_pretrain.sh and scripts/prepare_data_deepsets.sh.
+"""
 import argparse
 import h5py
 import numpy as np
 from pathlib import Path
-import os
 import time
 import datetime
 from tqdm import tqdm
@@ -10,13 +14,16 @@ import sys
 from exp_paths import (DEFAULT_TASK, EVAL_DATASET_SIZE, INPUT_STATS_NPZ, TARGET_STATS_NPZ, TASKS, VALID_DATASET_SIZES,
                        compute_input_stats, dataset_key, get_data_dir, load_input_stats, shared_test_dirname)
 
-# Real-stream inputs (the downstream tasks, not the proxies): the x, y, z
-# columns of the raw Cartesian_data.
+# The --target_columns of the real streams (the downstream tasks, not the proxies), whose inputs are the x, y, z columns of the raw Cartesian_data.
 REAL_STREAM_COLUMNS = ('3d_x_y_z',)
 XYZ_COLUMNS = [0, 1, 2]
 
 
 def parse_args():
+    """Parses the command line, and exits for a DeepSets request on a proxy, which has no DeepSets data.
+
+    Returns the argparse Namespace.
+    """
     parser = argparse.ArgumentParser()
     parser.add_argument('--input_raw', type=str, required=True)
     parser.add_argument('--output_root', type=str, default="..", help="Repository root for output datasets")
@@ -25,7 +32,7 @@ def parse_args():
     parser.add_argument('--output_model', type=str, default="", help="Optional model folder name override for saving outputs")
     parser.add_argument('--task', type=str, choices=list(TASKS), default=DEFAULT_TASK,
                         help="Regression task: sets the output folder prefix and the DeepSets label key")
-    parser.add_argument('--target_columns', type=str, choices=['3d_x_y_z', '3d_proxy_ellipsoid', '3d_proxy_cube', '3d_proxy_bounded_ball', '3d_proxy_gaussian_ball', '3d_proxy_hard_ellipsoid', '3d_proxy_box', '3d_x_y_z_eigenvalues'], required=True)
+    parser.add_argument('--target_columns', type=str, choices=['3d_x_y_z', '3d_proxy_ellipsoid', '3d_proxy_cube', '3d_proxy_bounded_ball', '3d_proxy_gaussian_ball', '3d_proxy_hard_ellipsoid', '3d_proxy_box'], required=True)
     parser.add_argument('--shared_test_raw', type=str, default=None,
                         help=f"Raw HDF5 of the size-{EVAL_DATASET_SIZE} dataset. With a real-stream "
                              f"--target_columns, also writes its test split, with inputs normalized with "
@@ -41,6 +48,13 @@ def parse_args():
 
 
 def validate_input_raw_size(input_raw, dataset_size):
+    """Checks that the raw HDF5 holds dataset_size streams.
+
+    Returns nothing; raises KeyError if the file has no 'pid' dataset and ValueError if its stream count differs.
+
+    `input_raw`: the raw HDF5 path.
+    `dataset_size`: the expected number of streams.
+    """
     with h5py.File(input_raw, 'r') as f:
         if 'pid' not in f:
             raise KeyError(f"Dataset 'pid' not found in input file: {input_raw}")
@@ -53,6 +67,16 @@ def validate_input_raw_size(input_raw, dataset_size):
         )
 
 def process_deepsets(input_raw, output_dir, label_key):
+    """Copies every stream's raw x, y, z coordinates and target into DeepSets' data file.
+
+    Returns nothing; writes <output_dir>/deepsets_dataset.h5.
+
+    Nothing is split or normalized here: dataset.py splits the streams and normalizes them on the fly with train-split statistics.
+
+    `input_raw`: the raw HDF5 path.
+    `output_dir`: the data folder.
+    `label_key`: the name of the target dataset in the output, from TASKS (e.g. Log_Prog_Mass).
+    """
     p = Path(output_dir)
     p.mkdir(parents=True, exist_ok=True)
     output_file = p / "deepsets_dataset.h5"
@@ -66,11 +90,16 @@ def process_deepsets(input_raw, output_dir, label_key):
     print(f"Created {output_file} with raw_data of {raw_data.shape} and pid_reg_ds of {pid_reg_ds.shape}")
 
 def standardize_target(y, split, output_dir):
-    """z-scores a real-stream target with the train split's mean/std, saved to
-    streams/target_stats.npz. The test split keeps the raw target: training never
-    reads it, and predictions are mapped back with these stats before scoring
-    (as sklearn's TransformedTargetRegressor does), so the shared test split
-    stays one raw copy."""
+    """z-scores a real-stream target with the train split's mean and population std, which the train split saves to streams/target_stats.npz.
+
+    Returns the z-scored target, or y unchanged for the test split.
+
+    The test split keeps the raw target: training never reads it, and predictions are mapped back with these stats before scoring (as sklearn's TransformedTargetRegressor does), so every reported number is in raw units.
+
+    `y`: the split's targets.
+    `split`: 'train', 'val' or 'test'; val needs the train split processed first (FileNotFoundError otherwise).
+    `output_dir`: the data folder, holding streams/.
+    """
     stats_file = Path(output_dir) / "streams" / TARGET_STATS_NPZ
     if split == 'test':
         return y
@@ -87,13 +116,18 @@ def standardize_target(y, split, output_dir):
 
 
 def standardize_input(x, split, output_dir):
-    """Normalizes a (n_clouds, n_particles, 3) x, y, z input array with the
-    train split's statistics (exp_paths.compute_input_stats), saved to
-    streams/input_stats.npz: all three divided by one shared length scale,
-    nothing subtracted. The statistics are dataset-wide, never per point
-    cloud, so each cloud keeps its overall size, shape and position (a proxy's
-    target is its size). Unlike the target, the test split is transformed too:
-    a model has to see test inputs on the scale it was trained on."""
+    """Normalizes an x, y, z input array with the train split's statistics (exp_paths.compute_input_stats), which the train split saves to streams/input_stats.npz.
+
+    Returns the normalized array, in x's dtype.
+
+    All three axes are divided by one shared length scale, and nothing is subtracted.
+    The statistics are dataset-wide, never per point cloud, so each cloud keeps its overall size, shape and position (a proxy's target is its size).
+    Unlike the target, the test split is transformed too, because a model has to see test inputs on the scale it was trained on.
+
+    `x`: the split's inputs, shape (n_clouds, n_particles, 3).
+    `split`: 'train', 'val' or 'test'; val and test need the train split processed first (FileNotFoundError otherwise).
+    `output_dir`: the data folder, holding streams/.
+    """
     stats_file = Path(output_dir) / "streams" / INPUT_STATS_NPZ
     if split == 'train':
         mean, std = compute_input_stats(x)
@@ -107,11 +141,16 @@ def standardize_input(x, split, output_dir):
 
 
 def write_shared_test(eval_raw, output_dir):
-    """Writes the size-EVAL_DATASET_SIZE dataset's test split to
-    data/shared_test<N>/streams/test/, the copy this dataset's models are
-    scored on: inputs normalized with this dataset's own input stats, target raw
-    (predictions are mapped back to it), same split boundary as
-    process_omnilearned."""
+    """Writes the size-EVAL_DATASET_SIZE dataset's test split as the shared-test copy this dataset's models are scored on.
+
+    Returns nothing; writes test_streams.hdf5 and file_index.npy to <output_dir>/shared_test<N>/streams/test/, and raises ValueError if eval_raw does not hold EVAL_DATASET_SIZE streams.
+
+    The inputs are normalized with this dataset's own input stats, and the target stays raw (predictions are mapped back to it).
+    The split boundary, the last 20% of the streams, is the same as in process_omnilearned.
+
+    `eval_raw`: the raw HDF5 of the size-EVAL_DATASET_SIZE dataset.
+    `output_dir`: this dataset's data folder, whose streams/input_stats.npz must already exist.
+    """
     with h5py.File(eval_raw, 'r') as f:
         n_streams = int(f['pid'].shape[0])
         if n_streams != EVAL_DATASET_SIZE:
@@ -134,13 +173,25 @@ def write_shared_test(eval_raw, output_dir):
 
 
 def process_omnilearned(input_raw, output_dir, target_columns):
+    """Writes OmniLearned's train/val/test splits (3:1:1, in stream order) of the real streams or of a synthesized proxy.
+
+    Returns nothing; writes, for each split, <output_dir>/streams/<split>/<split>_streams.hdf5 (data, pid, original_idx) and file_index.npy, plus the stats files.
+
+    The real streams take the x, y, z columns and the target of input_raw, and their target is z-scored with standardize_target.
+    A proxy takes only the stream and particle counts from input_raw, synthesizes its point clouds and targets, and z-scores its targets in all three splits with train-split statistics saved to streams/<synthesis tag>_stats.npz.
+    Every split's inputs are then normalized with standardize_input.
+
+    `input_raw`: the raw HDF5 path.
+    `output_dir`: the data folder.
+    `target_columns`: '3d_x_y_z' for the real streams, or a 3d_proxy_* synthesis tag.
+    """
 
     with h5py.File(input_raw, 'r') as f:
         cart_ds = f['Cartesian_data']
         pid_reg_ds = f['pid']
-        
+
         num_streams = cart_ds.shape[0]
-        num_particles = cart_ds.shape[1]  # Get the number of particles，usually 4000
+        num_particles = cart_ds.shape[1]  # particles per stream (4,000), so the proxies match the real streams
         
         train_split = int(num_streams * 0.6)
         val_split = int(num_streams * 0.8)
@@ -151,6 +202,7 @@ def process_omnilearned(input_raw, output_dir, target_columns):
             ('test', val_split, num_streams)
         ]
         
+        # The proxies below are drawn from np.random unseeded; the released proxy datasets are the reference copy.
         for name, start, end in ranges:
             p = Path(output_dir) / "streams" / name
             p.mkdir(parents=True, exist_ok=True)
@@ -220,7 +272,7 @@ def process_omnilearned(input_raw, output_dir, target_columns):
                 n_streams = end - start
                 sub_data = np.zeros((n_streams, num_particles, 3), dtype=np.float32)
 
-                # 1-D label: edge length a
+                # 1-D target: edge length a
                 sub_pid_reg = np.zeros((n_streams, 1), dtype=np.float32)
 
                 from tqdm import tqdm
@@ -270,7 +322,7 @@ def process_omnilearned(input_raw, output_dir, target_columns):
                 n_streams = end - start
                 sub_data = np.zeros((n_streams, num_particles, 3), dtype=np.float32)
 
-                # 1-D label: ball radius r
+                # 1-D target: ball radius r
                 sub_pid_reg = np.zeros((n_streams, 1), dtype=np.float32)
 
                 from tqdm import tqdm
@@ -310,7 +362,7 @@ def process_omnilearned(input_raw, output_dir, target_columns):
                 n_streams = end - start
                 sub_data = np.zeros((n_streams, num_particles, 3), dtype=np.float32)
 
-                # 1-D label: isotropic sigma
+                # 1-D target: isotropic sigma
                 sub_pid_reg = np.zeros((n_streams, 1), dtype=np.float32)
 
                 from tqdm import tqdm
@@ -345,8 +397,7 @@ def process_omnilearned(input_raw, output_dir, target_columns):
                 n_streams = end - start
                 sub_data = np.zeros((n_streams, num_particles, 3), dtype=np.float32)
 
-                # 3-D label: (a, b, c) semi-axes; reuse ellipsoid's sigma ranges
-                # so hard_ellipsoid <-> ellipsoid is a clean hard-vs-soft ablation.
+                # 3-D target: semi-axes (a, b, c), in the ellipsoid's sigma ranges, so hard_ellipsoid vs ellipsoid is a clean hard-vs-soft ablation.
                 sub_pid_reg = np.zeros((n_streams, 3), dtype=np.float32)
 
                 from tqdm import tqdm
@@ -357,10 +408,7 @@ def process_omnilearned(input_raw, output_dir, target_columns):
 
                     sub_pid_reg[i] = [a, b, c]
 
-                    # uniform-in-volume sampling inside the unit ball, then
-                    # scale per-axis to fill an ellipsoid (Jacobian is constant
-                    # under diagonal scaling, so the result is uniform inside
-                    # the ellipsoid).
+                    # Uniform in the unit ball, then scaled per axis to fill the ellipsoid, which stays uniform because a diagonal scaling has a constant Jacobian.
                     dirs = np.random.normal(size=(num_particles, 3))
                     dirs /= np.linalg.norm(dirs, axis=1, keepdims=True)
                     radii = np.random.uniform(0.0, 1.0, size=num_particles) ** (1.0 / 3.0)
@@ -405,9 +453,7 @@ def process_omnilearned(input_raw, output_dir, target_columns):
                 n_streams = end - start
                 sub_data = np.zeros((n_streams, num_particles, 3), dtype=np.float32)
 
-                # 3-D label: (a, b, c) semi-edge-lengths. Reuse hard_ellipsoid's
-                # ranges so box <-> hard_ellipsoid is a clean cornered-vs-smooth
-                # ablation under the same per-axis maximum extent.
+                # 3-D target: semi-edge lengths (a, b, c), in hard_ellipsoid's ranges, so box vs hard_ellipsoid is a clean cornered-vs-smooth ablation with the same maximum extent per axis.
                 sub_pid_reg = np.zeros((n_streams, 3), dtype=np.float32)
 
                 from tqdm import tqdm
@@ -459,69 +505,9 @@ def process_omnilearned(input_raw, output_dir, target_columns):
 
                 sub_pid_reg[:] = (sub_pid_reg - mean_val) / std_val
 
-            elif target_columns == '3d_x_y_z_eigenvalues':
-                n_streams = end - start
-                
-                # Input：Still use the real stream data
-                sub_data = cart_ds[start:end, :, [0, 1, 2]]  # (n_streams, 4000, 3)
-                
-                # Target：the 3D eigenvalues for each stream
-                sub_pid_reg = np.zeros((n_streams, 3), dtype=np.float32)
-                
-                from tqdm import tqdm
-                print(f"Computing eigenvalues for {name} streams...")
-                
-                # First pass: compute all eigenvalues
-                eigenvalues_list = []
-                for i in tqdm(range(n_streams), desc=f"Processing {name}"):
-                    points = sub_data[i]  # (4000, 3)
-                    
-                    points_centered = points - points.mean(axis=0)
-                    
-                    cov_matrix = np.cov(points_centered.T)  # (3, 3)
-                    
-                    eigenvalues = np.linalg.eigvalsh(cov_matrix)  # (3,)
-            
-                    # Make sure the eigenvalues are corresponding to Length>Width>Thickness
-                    eigenvalues_sorted = np.sort(eigenvalues)[::-1]
-                    
-                    # eigenvalues = variance = sigma^2
-                    # sqrt(eigenvalues) = sigma
-                    eigenvalues_list.append(np.sqrt(eigenvalues_sorted))
-                
-                # Convert to array
-                eigenvalues_array = np.array(eigenvalues_list)
-                
-                # Compute or load z-score statistics
-                stats_file = Path(output_dir) / "streams" / "eigenvalue_stats.npz"
-                
-                if name == 'train':
-                    # Compute statistics from train set
-                    mean_val = eigenvalues_array.mean(axis=0)
-                    std_val = eigenvalues_array.std(axis=0)
-                    
-                    # Save for val and test
-                    stats_file.parent.mkdir(parents=True, exist_ok=True)
-                    np.savez(stats_file, mean=mean_val, std=std_val)
-                    print(f"Train set - Mean: {np.round(mean_val, 4)}, Std: {np.round(std_val, 4)} (saved)")
-                else:
-                    # Load statistics from train set
-                    if not stats_file.exists():
-                        raise FileNotFoundError(f"Cannot find {stats_file}. Please process 'train' split first!")
-                    stats = np.load(stats_file)
-                    mean_val = stats['mean']
-                    std_val = stats['std']
-                    print(f"{name} set - Using train statistics: Mean: {np.round(mean_val, 4)}, Std: {np.round(std_val, 4)}")
-                
-                # Apply z-score normalization using train statistics
-                z_scores = (eigenvalues_array - mean_val) / std_val
-                
-                # Store the z-scores
-                sub_pid_reg[:] = z_scores
             if target_columns in REAL_STREAM_COLUMNS:
                 sub_pid_reg = standardize_target(sub_pid_reg, name, output_dir)
-            # After the branches above, which compute every proxy target from
-            # the raw coordinates.
+            # Inputs are normalized only after the branches above, which synthesize each proxy's point clouds and target in raw units.
             sub_data = standardize_input(sub_data, name, output_dir)
             with h5py.File(output_filename, 'w') as out_f:
                 out_f.create_dataset('data', data=sub_data, compression="gzip")

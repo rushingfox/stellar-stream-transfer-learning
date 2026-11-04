@@ -1,11 +1,9 @@
-"""Re-scores a trained DeepSets checkpoint against dataset_size=10000's
-test split instead of its own. Checkpoint selection is unchanged (still each
-run's own best-val epoch). The model was trained on inputs and target
-normalized with its own training data's train-split statistics (not persisted
-anywhere, so recomputed here from --dataset_size's own data): the shared test
-inputs are normalized with those input stats, and the predictions mapped back
-to the raw target. Writes run_<idx>/shared_test<N>/loss_history.csv and
-predictions.npz (raw units).
+"""Scores a trained DeepSets checkpoint on the shared test set (the test split of --eval_dataset_size, 10000 by default) instead of its own test split.
+
+The checkpoint is still the run's own best-val epoch, as main.py selected it.
+The model was trained with inputs and target normalized by the train-split statistics of its own --dataset_size, which are not saved anywhere, so they are recomputed here from that size's data.
+The shared test inputs are normalized with those input stats, and the predictions are mapped back to raw target units with pred * std + mean.
+Writes run_<idx>/shared_test<N>/loss_history.csv and predictions.npz, both in raw units.
 """
 import argparse
 import glob
@@ -22,6 +20,10 @@ from model import DeepSetsRegressor
 
 
 def parse_args():
+    """Reads which run to score, and on which shared test set, from the command line.
+
+    Returns the argparse namespace.
+    """
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument('--repo_root', type=str, default="..")
     p.add_argument('--target_columns', type=str, default="3d_x_y_z")
@@ -40,9 +42,13 @@ def parse_args():
 
 
 def hidden_dim_from_checkpoint(state_dict, override):
-    """encoder.0 is Linear(input_dim, hidden_dim), so its weight is
-    [hidden_dim, input_dim]. Read from the weights rather than guessed from the
-    folder name, so any width (and any folder suffix) works."""
+    """Reads the DeepSets hidden width from the checkpoint weights rather than the folder name, so any width and any folder suffix works.
+
+    Returns hidden_dim; raises ValueError if `override` disagrees with it.
+
+    `state_dict`: the DeepSets state_dict; encoder.0 is Linear(input_dim, hidden_dim), so its weight is [hidden_dim, input_dim].
+    `override`: --hidden_dim, or None to skip the check.
+    """
     hidden_dim = int(state_dict["encoder.0.weight"].shape[0])
     if override is not None and override != hidden_dim:
         raise ValueError(f"--hidden_dim {override} disagrees with the checkpoint ({hidden_dim})")
@@ -50,12 +56,24 @@ def hidden_dim_from_checkpoint(state_dict, override):
 
 
 def shared_deepsets_h5(repo_root, target_columns, dataset_size, task):
-    """<task>_<target_columns>_<size>/data/deepsets_dataset.h5 -- one copy per size,
-    shared by every DeepSets width (like OmniLearned's data/streams/)."""
+    """Gives the path of one size's DeepSets dataset, a single copy shared by every DeepSets run at that size (like OmniLearned's data/streams/).
+
+    Returns <task>_<target_columns>_<size>/data/deepsets_dataset.h5 under repo_root.
+
+    `repo_root`: the repo root, where the experiment folders are.
+    `target_columns`, `dataset_size`: pick the experiment folder, e.g. 3d_x_y_z and 1000.
+    `task`: 'prog_mass' or 'subhalo', the experiment folder prefix.
+    """
     return get_dataset_dir(repo_root, target_columns, dataset_size, task) / "data" / "deepsets_dataset.h5"
 
 
 def load_test_split(h5_path):
+    """Loads the test split (the last 20%) of a deepsets_dataset.h5, unnormalized.
+
+    Returns (raw, y): the raw x, y, z coordinates of every particle and the raw targets.
+
+    `h5_path`: the deepsets_dataset.h5 to read.
+    """
     with h5py.File(h5_path, 'r') as f:
         label_key = find_label_key(f)
         total = f[label_key].shape[0]
@@ -66,6 +84,12 @@ def load_test_split(h5_path):
 
 
 def find_checkpoint(run_dir):
+    """Finds the best-val checkpoint main.py saved and renamed after training.
+
+    Returns the path of the one checkpoints/best_model_epoch_*.pt; raises if there is none or more than one.
+
+    `run_dir`: the run_<idx> folder.
+    """
     matches = sorted(glob.glob(os.path.join(str(run_dir), 'checkpoints', 'best_model_epoch_*.pt')))
     if not matches:
         raise FileNotFoundError(f"No best_model_epoch_*.pt found under {run_dir}/checkpoints/")
@@ -75,7 +99,12 @@ def find_checkpoint(run_dir):
 
 
 def read_own_best_val(run_dir):
-    """Best-val epoch/loss main.py already selected -- not re-selected here."""
+    """Reads the best-val epoch and loss that main.py already selected; nothing is re-selected here.
+
+    Returns (epoch, val_loss) of the lowest-Val_Loss row of results/loss_history.csv.
+
+    `run_dir`: the run_<idx> folder.
+    """
     csv_path = os.path.join(str(run_dir), 'results', 'loss_history.csv')
     df = pd.read_csv(csv_path)
     best_idx = df['Val_Loss'].idxmin()
@@ -83,6 +112,10 @@ def read_own_best_val(run_dir):
 
 
 def main():
+    """Scores one DeepSets run on the shared test set.
+
+    Returns nothing; writes loss_history.csv (best-val epoch, its val loss and the shared test MSE) and predictions.npz to the run's shared_test<N>/, or skips with a warning if the run folder does not exist.
+    """
     args = parse_args()
     validate_dataset_size(args.dataset_size)
     validate_dataset_size(args.eval_dataset_size)
@@ -125,8 +158,8 @@ def main():
     out_path.parent.mkdir(parents=True, exist_ok=True)
     pd.DataFrame([{"Epoch": best_epoch, "Val_Loss": best_val, "Test_Loss": test_mse}]).to_csv(out_path, index=False)
 
-    # Per-sample predictions (same keys as OmniLearned's outputs__streams_*.npz)
-    # for matched/paired per-stream comparisons downstream.
+    # Per-stream predictions under the same keys as OmniLearned's outputs__streams_*.npz (pid is the raw target), read downstream by compute_bootstrap_shared_test.py.
+    # Unlike OmniLearned's z-scored predictions, these are already in raw units.
     npz_path = out_path.parent / "predictions.npz"
     np.savez(npz_path, prediction=preds, pid=y)
 

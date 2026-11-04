@@ -1,18 +1,10 @@
-"""Build the ``3d_x_y_z_eigenvalues_lambda{K}`` proxy (K = 1, 2 or 3) directly from
-the shared real-stream data.
+"""Builds the ``3d_x_y_z_eigenvalues_lambda{K}`` proxy (K = 1, 2 or 3) directly from the shared real-stream data.
 
-Input point clouds are exactly the 10000-size finetune data
-(``prog_mass_3d_x_y_z_10000/data/streams``), same streams and same train/val/test split;
-only the label changes. Those inputs are already normalized with that train
-split's input stats, which are this proxy's own train stats too, so they are
-copied as-is together with input_stats.npz. The label is the K-th largest PCA
-spatial scale, sqrt(lambda_K), of the raw coordinates in kpc (read from
---input_raw, not from the normalized inputs), computed exactly as
-``prepare_data.py``'s ``3d_x_y_z_eigenvalues`` branch does (np.cov, eigvalsh,
-sorted descending, sqrt) and z-scored with train-split statistics.
+The input point clouds are exactly the 10000-size finetune data (``prog_mass_3d_x_y_z_10000/data/streams``), the same streams in the same train/val/test split; only the target changes.
+Those inputs are already normalized with that train split's input stats, which are this proxy's own train stats too, so they are copied as is, together with input_stats.npz.
+The target is the K-th largest PCA spatial scale, sqrt(lambda_K), in kpc, computed from the raw coordinates in --input_raw rather than from the normalized inputs (np.cov, eigvalsh, sorted descending, sqrt).
+It is z-scored with train-split statistics.
 lambda1 ~ stream length, lambda2 / lambda3 ~ width / thickness.
-
-No 3-target ``3d_x_y_z_eigenvalues`` parent dataset is needed.
 
     python src/make_eigen_lambda_from_streams.py --index 2
 """
@@ -31,7 +23,12 @@ SPLITS = ("train", "val", "test")
 
 
 def sqrt_eigenvalues(points):
-    """(n_streams, n_points, 3) -> (n_streams, 3), sqrt(lambda) sorted descending."""
+    """Computes each stream's PCA spatial scales, the square roots of its covariance eigenvalues.
+
+    Returns an (n_streams, 3) array, sorted descending within each stream, in the units of `points`.
+
+    `points`: an (n_streams, n_points, 3) array of coordinates.
+    """
     out = np.empty((points.shape[0], 3))
     for i, pts in enumerate(points):
         centered = pts - pts.mean(axis=0)
@@ -41,6 +38,10 @@ def sqrt_eigenvalues(points):
 
 
 def main():
+    """Writes the proxy dataset for --index K under --out_root: the three splits, the target stats and input_stats.npz; refuses to overwrite an existing one.
+
+    Returns nothing.
+    """
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--index", type=int, choices=(1, 2, 3), required=True, help="which lambda: 1 = largest")
     p.add_argument("--out_root", type=Path, default=REPO_ROOT,
@@ -64,9 +65,8 @@ def main():
             scales[split] = sqrt_eigenvalues(raw["Cartesian_data"][idx[0]:idx[-1] + 1, :, [0, 1, 2]])
             print(f"  {split}: {scales[split].shape[0]} streams")
 
-    # z-score with train-split statistics only (population std). Taken over all
-    # three columns and then indexed -- the same operation order as
-    # prepare_data.py, so even the stats file is bit-identical for K=1.
+    # z-score with train-split statistics only (population std).
+    # They are taken over all three columns and then indexed, the same order of operations as prepare_data.py uses for its 3-target proxies.
     mean = scales["train"].mean(axis=0)[k - 1]
     std = scales["train"].std(axis=0)[k - 1]
 

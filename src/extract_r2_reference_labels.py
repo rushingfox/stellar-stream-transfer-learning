@@ -1,16 +1,8 @@
-"""Extract the small slice of test-split labels needed for the R^2 reference
-variance (Var(y_test)), instead of shipping/reading the full raw
-prog_mass_reg_dataset_<N>.h5 (hundreds of MB to ~1GB for N=10000).
+"""Extracts the test-split targets of a raw dataset, for the R^2 reference variance Var(y_test).
 
-This "sidecar" file (a few KB) is what lets evaluation/reproduce_main_figure.ipynb
-rebuild the paper's R^2 figure from the git-tracked per-run csv/npz alone,
-without needing the raw dataset. Test-split convention matches
-prepare_data.py/dataset.py exactly: last 20% of the raw dataset
-(val_end = int(N * 0.8), test = pid[val_end:]).
-
-Anyone who downloads the raw data (e.g. from the paper's Zenodo record) can
-regenerate this file themselves with the command below -- it is not a
-one-off, hand-run artifact.
+The output, a small sidecar file, stands in for the full raw dataset, so evaluation/reproduce_main_figure.ipynb can rebuild the paper's R^2 figure from the per-run bootstrap.csv files alone.
+The test split matches prepare_data.py and dataset.py exactly: the last 20% of the raw dataset (val_end = int(N * 0.8), test = pid[val_end:]).
+Anyone who downloads the raw data (e.g. from the paper's Zenodo record) can regenerate the file with the command below.
 
 Usage:
     python src/extract_r2_reference_labels.py \
@@ -24,6 +16,10 @@ import numpy as np
 
 
 def parse_args():
+    """Reads the raw dataset and the output path from the command line.
+
+    Returns the argparse namespace.
+    """
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument('--input_raw', type=str, required=True,
                     help="Path to the raw prog_mass_reg_dataset_<N>.h5 file")
@@ -33,6 +29,10 @@ def parse_args():
 
 
 def main():
+    """Saves the raw test-split targets (pid) of --input_raw to --output as .npy and prints their variance.
+
+    Returns nothing.
+    """
     args = parse_args()
     with h5py.File(args.input_raw, 'r') as f:
         y = f['pid'][:].ravel()

@@ -1,3 +1,6 @@
+"""Turns an OmniLearned run's training_.json and test predictions into a loss_history.csv and diagnostic plots.
+The OmniLearned runners call it after training; Test_Loss is filled in only at the best-val epoch.
+"""
 import os
 import json
 import glob
@@ -10,6 +13,10 @@ from sklearn.metrics import mean_squared_error
 from exp_paths import load_target_stats
 
 def parse_args():
+    """Parses the command line.
+
+    Returns the argparse namespace.
+    """
     parser = argparse.ArgumentParser(description="Export Train/Val/Test MSE to CSV and Plot Curves")
     parser.add_argument('--json_path', type=str, default="../training_.json")
     parser.add_argument('--npz_glob', type=str, default="../outputs__streams_*.npz",
@@ -35,7 +42,7 @@ def parse_args():
 
 
 def _parse_refs(raw_refs):
-    """Parse each --ref 'LABEL:V1,V2,...' into (label, [floats]) tuples."""
+    """Parses each --ref 'LABEL:V1,V2,...' into a (label, [floats]) tuple, skipping malformed ones with a warning."""
     parsed = []
     for raw in raw_refs:
         if ":" not in raw:
@@ -54,6 +61,15 @@ def _parse_refs(raw_refs):
     return parsed
 
 def plot_loss_curve(train_losses, val_losses, best_epoch_num, overall_test_metric, out_path):
+    """Plots train and val loss vs epoch, with the best-val epoch and its test MSE marked.
+
+    Returns nothing; saves the figure to out_path.
+
+    `train_losses`, `val_losses`: the per-epoch losses.
+    `best_epoch_num`: the best-val epoch (1-based), or None.
+    `overall_test_metric`: the test MSE at that epoch, or None/NaN to leave it out.
+    `out_path`: the PNG path.
+    """
     epochs = np.arange(1, len(train_losses) + 1)
     test_label = "Test MSE"
 
@@ -83,6 +99,15 @@ def plot_loss_curve(train_losses, val_losses, best_epoch_num, overall_test_metri
     plt.close()
 
 def plot_true_vs_pred_combined(t_matrix, p_matrix, epoch_num, mse_val, out_path):
+    """Scatter-plots predicted vs true values of every target, with the y = x line.
+
+    Returns nothing; saves the figure to out_path.
+
+    `t_matrix`, `p_matrix`: true and predicted values, of shape (n_samples, n_targets).
+    `epoch_num`: the best-val epoch, shown in the title.
+    `mse_val`: the test MSE, shown in the title.
+    `out_path`: the PNG path.
+    """
     colors = ['#1f77b4', '#ff7f0e', '#2ca02c', '#d62728', '#9467bd', '#8c564b']  # up to 6D
     plt.figure(figsize=(10, 6))
     
@@ -106,6 +131,17 @@ def plot_true_vs_pred_combined(t_matrix, p_matrix, epoch_num, mse_val, out_path)
     plt.close()
 
 def plot_ratio_combined(t_matrix, p_matrix, epoch_num, mse_val, out_path):
+    """Plots the predicted/true ratio vs the true value for every target, skipping samples whose true value is 0.
+
+    Returns nothing; saves the figure to out_path.
+
+    The y-range follows the 1st to 99th percentile of the ratios.
+
+    `t_matrix`, `p_matrix`: true and predicted values, of shape (n_samples, n_targets).
+    `epoch_num`: the best-val epoch, shown in the title.
+    `mse_val`: the test MSE, shown in the title.
+    `out_path`: the PNG path.
+    """
     colors = ['#1f77b4', '#ff7f0e', '#2ca02c', '#d62728', '#9467bd', '#8c564b']
     plt.figure(figsize=(10, 6))
     all_ratios = []
@@ -140,16 +176,16 @@ def plot_ratio_combined(t_matrix, p_matrix, epoch_num, mse_val, out_path):
 
 
 def plot_r2_curve(val_r2_ptt, best_epoch_num, out_path, refs=None):
-    """Per-target validation R^2 vs epoch. val_r2_ptt: [n_epochs, n_targets].
+    """Plots the validation R^2 of each target vs epoch.
 
-    Y range is clipped to [-0.2, 1.05] so the interesting 0-1 band is legible;
-    early epochs where R^2 << 0 are drawn off-scale (line still connects at the
-    lower edge). Title notes the clipping so readers don't misinterpret.
+    Returns nothing; saves the figure to out_path.
 
-    ``refs`` (optional): list of ``(label, [v0, v1, ...])`` tuples. Each ref
-    group draws one horizontal axhline per target at the corresponding value,
-    same color as the target's training curve, distinguished by linestyle so
-    reader can visually pair "my target_0 curve" with "paper target_0 value".
+    The y-range is clipped to [-0.2, 1.05] so the 0-1 band is legible; early epochs far below 0 run off the bottom, and the title says so.
+
+    `val_r2_ptt`: R^2 per epoch and target, of shape (n_epochs, n_targets).
+    `best_epoch_num`: the best-val epoch, drawn as a vertical line, or None.
+    `out_path`: the PNG path.
+    `refs`: optional [(label, [v0, v1, ...])]; each label draws one horizontal line per target, in that target's color and a line style of its own, so a curve pairs with its reference value.
     """
     colors = ['#1f77b4', '#ff7f0e', '#2ca02c', '#d62728', '#9467bd', '#8c564b']
     epochs = np.arange(1, val_r2_ptt.shape[0] + 1)
@@ -189,7 +225,14 @@ def plot_r2_curve(val_r2_ptt, best_epoch_num, out_path, refs=None):
 
 
 def plot_mse_per_target(train_ptt, val_ptt, best_epoch_num, out_path):
-    """Train/Val per-target MSE vs epoch. train_ptt / val_ptt: [n_epochs, n_targets]."""
+    """Plots the train (solid) and val (dashed) MSE of each target vs epoch.
+
+    Returns nothing; saves the figure to out_path.
+
+    `train_ptt`, `val_ptt`: MSE per epoch and target, of shape (n_epochs, n_targets).
+    `best_epoch_num`: the best-val epoch, drawn as a vertical line, or None.
+    `out_path`: the PNG path.
+    """
     colors = ['#1f77b4', '#ff7f0e', '#2ca02c', '#d62728', '#9467bd', '#8c564b']
     epochs = np.arange(1, train_ptt.shape[0] + 1)
     n_targets = train_ptt.shape[1]
@@ -218,10 +261,14 @@ def plot_mse_per_target(train_ptt, val_ptt, best_epoch_num, out_path):
 
 
 def main():
+    """Reads the training log and the predictions, then writes the CSV and the plots.
+
+    Returns nothing.
+    """
     args = parse_args()
     print(f"\nProcessing data for: {args.output_csv}")
     
-    # Get the output dir (e.g. ./run_0/results/)
+    # The output dir, e.g. ./run_0/results/.
     out_dir = os.path.dirname(args.output_csv)
     if out_dir and not os.path.exists(out_dir):
         os.makedirs(out_dir, exist_ok=True)
@@ -240,7 +287,7 @@ def main():
             val_losses = data.get("val_loss", [])
             if len(val_losses) > 0:
                 best_epoch = np.argmin(val_losses) + 1
-            # New per-target fields (missing on old training_.json files → skip).
+            # Per-target fields; older training_.json files lack them, and then they are skipped.
             tptt = data.get("train_loss_per_target")
             vptt = data.get("val_loss_per_target")
             tvar = data.get("train_label_var")
@@ -248,10 +295,7 @@ def main():
             if tptt and vptt and tvar and vvar:
                 train_ptt = np.asarray(tptt, dtype=float)     # [n_ep, C]
                 val_ptt   = np.asarray(vptt, dtype=float)     # [n_ep, C]
-                # Older training_.json (from before the 1-target bug fix) may
-                # have written per_target as a 1-D list of scalars when C==1.
-                # Promote (n_ep,) → (n_ep, 1) so downstream code sees consistent
-                # shape.
+                # training_.json files from before the 1-target fix may store per_target as a 1-D list when C == 1, so (n_ep,) is promoted to (n_ep, 1).
                 if train_ptt.ndim == 1:
                     train_ptt = train_ptt.reshape(-1, 1)
                 if val_ptt.ndim == 1:
@@ -268,8 +312,7 @@ def main():
     if args.target_stats:
         target_mean, target_std = load_target_stats(args.target_stats)
         print(f"Target stats: mean {target_mean:.6f}, std {target_std:.6f} (from {args.target_stats})")
-        # MSE of z-scored targets times std^2 is the MSE in raw units; the R^2
-        # columns above are ratios of two such MSEs and need nothing.
+        # The MSE of z-scored targets times std^2 is the MSE in raw units; the R^2 columns above are ratios of two such MSEs and need no change.
         train_losses = [v * target_std ** 2 for v in train_losses]
         val_losses = [v * target_std ** 2 for v in val_losses]
         if train_ptt is not None:
@@ -277,10 +320,7 @@ def main():
             val_ptt = val_ptt * target_std ** 2
 
     # --- 2. Calculate Test metric from NPZ file(s) ---
-    # Glob-match every DDP rank's output file and concatenate — a single-GPU
-    # run has exactly one match (rank 0); a 1x4/multinode run has one per rank,
-    # and using only rank 0 there would silently compute Test MSE from a
-    # fraction of the test set (e.g. 500/2000 rows for a 4-rank 1x4 run).
+    # Every DDP rank writes its own npz, so all matches are concatenated; rank 0 alone would hold only part of the test set (500 of 2,000 rows on 4 ranks).
     test_loss = np.nan
     predictions, targets = None, None
     npz_files = sorted(glob.glob(args.npz_glob))

@@ -2,6 +2,15 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 def plot_real_versus_predicted(targets, preds, all_indices, epoch_num, savefig_path = "./results/pred_vs_true.png"):
+    """Scatters predicted against true targets around the y = x line, with the 10 worst predictions (by absolute error) marked and labelled by stream ID.
+
+    Returns nothing; saves the figure to savefig_path and prints the worst IDs.
+
+    `targets`, `preds`: the true and predicted targets.
+    `all_indices`: the stream IDs, in the same order.
+    `epoch_num`: the epoch shown in the title.
+    `savefig_path`: the image path.
+    """
     targets = np.array(targets)
     preds = np.array(preds)
     ids = np.array(all_indices)
@@ -58,6 +67,12 @@ def plot_real_versus_predicted(targets, preds, all_indices, epoch_num, savefig_p
     print("bad id list:", bad_ids)
 
 def plot_loss_curve(train_losses, val_losses):
+    """Plots the train and val loss per epoch on a log y-axis, with the final values annotated.
+
+    Returns nothing; saves loss_curve.png in the current directory.
+
+    `train_losses`, `val_losses`: one loss per epoch.
+    """
     plt.figure(figsize=(10, 6))
     
     epochs = range(1, len(train_losses) + 1)
@@ -90,6 +105,12 @@ def plot_loss_curve(train_losses, val_losses):
     plt.savefig('loss_curve.png', dpi=300)
 
 def plot_test_loss_curve(test_losses):
+    """Plots the test loss per epoch on a log y-axis, with the final value annotated.
+
+    Returns nothing; saves loss_curve_test.png in the current directory.
+
+    `test_losses`: one loss per epoch.
+    """
     plt.figure(figsize=(10, 6))
     
     epochs = range(1, len(test_losses) + 1)

@@ -13,14 +13,15 @@
 #SBATCH --mail-user=jianhao.wu@wisc.edu
 
 # NOTE: cube, bounded_ball and gaussian_ball are already 1-target, so this
-# output IS their final data. The other four are generated multi-target under
+# output IS their final data. The other three are generated multi-target under
 # prepare_data.py's own synthesis tags and need one slicing step to reach
 # their final 1-target form (src/make_<new>_from_<old>.py, which copies the
-# point clouds and keeps only the first/largest label column -- see README):
+# point clouds and keeps only the first/largest target column -- see README):
 #   3d_proxy_ellipsoid      -> gaussian_ellipsoid_sigmax
 #   3d_proxy_hard_ellipsoid -> bounded_ellipsoid_a
 #   3d_proxy_box            -> box_a
-#   3d_x_y_z_eigenvalues    -> eigen_lambda1
+# The eigen proxy is not made here: src/make_eigen_lambda_from_streams.py
+# builds it from the N=10000 finetune data.
 
 set -euo pipefail
 
@@ -34,7 +35,6 @@ mamba activate stream_transfer_learning
 export HDF5_USE_FILE_LOCKING=FALSE
 
 target_columns_default=(
-    "3d_x_y_z_eigenvalues"
     "3d_proxy_ellipsoid"
     "3d_proxy_cube"
     "3d_proxy_bounded_ball"

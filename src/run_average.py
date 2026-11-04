@@ -7,6 +7,10 @@ from exp_paths import DEFAULT_TASK, TASKS, VALID_DATASET_SIZES, find_label_key, 
 
 
 def parse_args():
+    """Reads the dataset size, run indices and optional shared-test size from the command line.
+
+    Returns the argparse namespace.
+    """
     parser = argparse.ArgumentParser(
         description="Generate a simple global-average baseline result."
     )
@@ -51,10 +55,14 @@ def parse_args():
 
 
 def main():
+    """Computes the mean-prediction baseline: the train split's mean target, predicted for every stream.
+
+    Returns nothing; writes run_<idx>/results/loss_history.csv for each --indices, or with --eval_dataset_size run_<idx>/shared_test<N>/loss_history.csv and predictions.npz, all in raw target units.
+    """
     args = parse_args()
     repo_dir = Path(__file__).resolve().parent.parent
 
-    # The shared DeepSets dataset for this size (only its labels are used).
+    # The shared DeepSets dataset of this size; only its raw targets are used.
     h5_path = get_dataset_dir(repo_dir, args.target_columns, args.dataset_size, args.task) / "data" / "deepsets_dataset.h5"
     
     if not h5_path.exists():
@@ -86,12 +94,11 @@ def main():
         eval_val_split = int(y_eval.shape[0] * 0.8)
         y_shared_test = y_eval[eval_val_split:]
         test_loss = np.mean((y_shared_test - mean_train) ** 2)
-        # Per-sample predictions (same keys as OmniLearned's outputs__streams_*.npz)
-        # for matched/paired per-stream comparisons downstream. Prediction is the
-        # same mean_train scalar repeated for every stream.
+        # Per-stream predictions in raw units, under the same keys as OmniLearned's outputs__streams_*.npz (pid is the raw target), read downstream by compute_bootstrap_shared_test.py.
+        # The prediction is the train mean, repeated for every stream.
         shared_pred = np.full_like(y_shared_test, mean_train, dtype=np.float64)
 
-    # Use a dedicated "average" model directory under the dataset key.
+    # The results go in an "average" model folder, with the same numbers for every index, since the baseline has no randomness.
     for idx in args.indices:
         if args.eval_dataset_size is None:
             out_dir = get_results_dir(repo_dir, args.target_columns, args.dataset_size, "average", idx, task=args.task)

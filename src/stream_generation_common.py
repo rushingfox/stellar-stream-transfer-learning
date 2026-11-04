@@ -1,14 +1,7 @@
-"""
-stream_generation_common.py
----------------------------
-Machinery shared by the stream-dataset generators (raw_data_generation.py and
-raw_data_generation_subhalo.py): the seeded task stream, the parallel
-accept/skip loop, the per-stream particle table, and the HDF5 writer whose
-layout (Cartesian_data / ICRS_data / pid) prepare_data.py reads.
+"""Machinery shared by the stream-dataset generators, raw_data_generation.py and raw_data_generation_subhalo.py.
 
-The physics of each dataset lives in its own generator script, which supplies a
-worker function taking one task tuple and returning either None (skip) or
-(stream_df, props_df, info_str).
+It holds the seeded task stream, the parallel accept/skip loop, the per-stream particle table, and the HDF5 writer whose layout (Cartesian_data / ICRS_data / pid) prepare_data.py reads.
+The physics of each dataset lives in its own generator script, which supplies a worker that takes one task tuple and returns None (skip) or (stream_df, props_df, info_str).
 """
 
 import functools
@@ -25,7 +18,12 @@ import pandas as pd
 
 
 def resolve_num_workers(num_workers=None):
-    """Explicit value if given, else $SLURM_CPUS_PER_TASK (set by Slurm on NERSC), else os.cpu_count()."""
+    """Picks the number of worker processes.
+
+    Returns num_workers if given, else $SLURM_CPUS_PER_TASK (set by Slurm on NERSC), else os.cpu_count().
+
+    `num_workers`: an explicit count, or None.
+    """
     if num_workers is not None:
         return num_workers
     slurm_cpus = os.environ.get("SLURM_CPUS_PER_TASK")
@@ -33,20 +31,30 @@ def resolve_num_workers(num_workers=None):
 
 
 def seed_iter(base_seed, *task_args):
-    """Yields (seed, *task_args) tasks with monotonically increasing seeds."""
+    """Yields the worker tasks, one per attempt, without end.
+
+    Returns a generator of (seed, *task_args) tuples, with seed = (base_seed * 1_000_003 + attempt) % 2**32 for attempt = 0, 1, 2, ...
+
+    `base_seed`: the dataset's base seed.
+    `task_args`: extra arguments appended to every task.
+    """
     attempt = 0
     while True:
-        # Combine base seed and attempt index into a unique seed.
-        # Multiply base_seed by a large prime to spread the space.
+        # One unique seed per attempt, with base_seed scaled by a large prime to spread the seeds of different base seeds apart.
         seed = (base_seed * 1_000_003 + attempt) % (2**32)
         yield (seed, *task_args)
         attempt += 1
 
 
 def stream_to_df(stream, stream_id, galactocentric_frame=None):
-    """Per-particle table of a gala mock stream: Galactocentric Cartesian
-    phase space plus the ICRS observables. galactocentric_frame=None uses
-    astropy's current Galactocentric defaults."""
+    """Builds the per-particle table of a gala mock stream.
+
+    Returns a DataFrame with one row per particle: stream_id, the Galactocentric Cartesian phase space (x, y, z, v_x, v_y, v_z) and the ICRS observables (ra, dec, distance, pm_ra_cosdec, pm_dec, radial_velocity).
+
+    `stream`: the gala mock stream.
+    `stream_id`: the id written in every row.
+    `galactocentric_frame`: the Galactocentric frame of the ICRS transform; None uses astropy's current Galactocentric defaults.
+    """
     if galactocentric_frame is None:
         stream_icrs = stream.to_coord_frame(coord.ICRS())
     else:
@@ -72,17 +80,17 @@ def stream_to_df(stream, stream_id, galactocentric_frame=None):
 def collect_streams(worker, tasks, num_streams, num_workers):
     """Runs worker over tasks in parallel until num_streams are accepted.
 
-    Results are consumed in task order, so the accepted set (the first
-    num_streams successes in seed order) depends only on the seeds, not on the
-    worker count. Returns the per-stream particle tables and the concatenated
-    per-stream properties, both renumbered with stream_id 0..num_streams-1.
+    Returns (all_streams, props_df): the list of per-stream particle tables and the concatenated per-stream properties, both renumbered with stream_id 0..num_streams-1.
 
-    At most 4 tasks per worker are in flight, topped up as results come in, so
-    every worker stays busy. Once enough streams are accepted no more tasks are
-    submitted, and the pool finishes the ones in flight and shuts down with
-    close()/join(). Stopping early with terminate() instead kills workers
-    mid-task; one killed while holding the result queue's lock leaves the main
-    process waiting on it forever.
+    Results are consumed in task order, so the accepted set (the first num_streams successes in seed order) depends only on the seeds, not on the worker count.
+    At most 4 tasks per worker are in flight, topped up as results come in, so every worker stays busy.
+    Once enough streams are accepted no more tasks are submitted, and the pool finishes the ones in flight and shuts down with close()/join().
+    Stopping early with terminate() instead would kill workers mid-task, and one killed while holding the result queue's lock leaves the main process waiting on it forever.
+
+    `worker`: a function of one task that returns None (skip) or (stream_df, props_df, info_str).
+    `tasks`: an iterator of tasks, e.g. from seed_iter.
+    `num_streams`: the number of streams to accept.
+    `num_workers`: the number of worker processes.
     """
     all_streams = []
     all_props   = []
@@ -106,7 +114,7 @@ def collect_streams(worker, tasks, num_streams, num_workers):
 
             stream_df, props_df, info = result
 
-            # Reassign canonical stream_id
+            # The canonical stream_id is the acceptance order.
             stream_df["stream_id"] = generated_count
             props_df["stream_id"]  = generated_count
 
@@ -134,17 +142,27 @@ def collect_streams(worker, tasks, num_streams, num_workers):
 
 
 def _as_float(x):
+    """3.0 * u.kpc -> 3.0 (the value in its own unit); 2 -> 2.0."""
     return x.value if hasattr(x, "value") else float(x)
 
 
 def save_dataset(output, all_streams, props_df, prop_cols, prop_units, props_key,
                  label_col, log_label):
-    """Writes the HDF5 layout that prepare_data.py reads:
+    """Writes the stream dataset to HDF5, in the layout prepare_data.py reads.
 
-    Cartesian_data  (N, T, 7)  x, y, z, v_x, v_y, v_z, v_total
-    ICRS_data       (N, T, 7)  ra, dec, distance, pm_ra_cosdec, pm_dec, radial_velocity, parallax
-    <props_key>     (N, len(prop_cols)), with 'columns' and 'units' attrs
-    pid             (N, 1)     props_df[label_col], log10'd if log_label
+    Returns nothing; writes `output` with these datasets, for N streams of T particles:
+    - Cartesian_data (N, T, 7): x, y, z, v_x, v_y, v_z, v_total.
+    - ICRS_data (N, T, 7): ra, dec, distance, pm_ra_cosdec, pm_dec, radial_velocity, parallax.
+    - <props_key> (N, len(prop_cols)), with 'columns' and 'units' attrs.
+    - pid (N, 1): the target, props_df[label_col], log10'd if log_label.
+
+    `output`: the HDF5 path.
+    `all_streams`, `props_df`: the per-stream particle tables and properties, from collect_streams.
+    `prop_cols`: the property columns stored under props_key, in order.
+    `prop_units`: {column: unit string}, for the 'units' attr.
+    `props_key`: the name of the properties dataset, e.g. prog_properties.
+    `label_col`: the property column that becomes the target.
+    `log_label`: store log10 of that column instead of its value.
     """
     # ---- build feature arrays ----------------------------------------------
     ICRS_raw_data_list      = []
@@ -175,7 +193,7 @@ def save_dataset(output, all_streams, props_df, prop_cols, prop_units, props_key
         for col in prop_cols
     ])
 
-    # ---- build label (pid) -------------------------------------------------
+    # ---- build target (pid) ------------------------------------------------
     label_vals = props_df[label_col].apply(_as_float).to_numpy()
     if log_label:
         label_vals = np.log10(label_vals)
