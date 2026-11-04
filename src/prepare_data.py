@@ -11,6 +11,7 @@ import time
 import datetime
 from tqdm import tqdm
 import sys
+import zlib
 from exp_paths import (DEFAULT_TASK, EVAL_DATASET_SIZE, INPUT_STATS_NPZ, TARGET_STATS_NPZ, TASKS, VALID_DATASET_SIZES,
                        compute_input_stats, dataset_key, get_data_dir, load_input_stats, shared_test_dirname)
 
@@ -38,6 +39,8 @@ def parse_args():
                              f"--target_columns, also writes its test split, with inputs normalized with "
                              f"this dataset's input stats, to data/{shared_test_dirname()}/ for the "
                              f"shared-test evaluation")
+    parser.add_argument('--seed', type=int, default=0,
+                        help="base seed of the proxy synthesis, combined with the proxy's tag; the real streams ignore it")
 
     args = parser.parse_args()
     if args.target_model == 'deepsets' and args.target_columns not in REAL_STREAM_COLUMNS:
@@ -172,7 +175,7 @@ def write_shared_test(eval_raw, output_dir):
     print(f"Created {p / 'test_streams.hdf5'}: shared test split, indices {start} to {n_streams - 1}")
 
 
-def process_omnilearned(input_raw, output_dir, target_columns):
+def process_omnilearned(input_raw, output_dir, target_columns, seed=0):
     """Writes OmniLearned's train/val/test splits (3:1:1, in stream order) of the real streams or of a synthesized proxy.
 
     Returns nothing; writes, for each split, <output_dir>/streams/<split>/<split>_streams.hdf5 (data, pid, original_idx) and file_index.npy, plus the stats files.
@@ -184,6 +187,7 @@ def process_omnilearned(input_raw, output_dir, target_columns):
     `input_raw`: the raw HDF5 path.
     `output_dir`: the data folder.
     `target_columns`: '3d_x_y_z' for the real streams, or a 3d_proxy_* synthesis tag.
+    `seed`: the base seed of a proxy's random generator; the real streams ignore it.
     """
 
     with h5py.File(input_raw, 'r') as f:
@@ -202,7 +206,9 @@ def process_omnilearned(input_raw, output_dir, target_columns):
             ('test', val_split, num_streams)
         ]
         
-        # The proxies below are drawn from np.random unseeded; the released proxy datasets are the reference copy.
+        # Each proxy draws from its own generator, seeded with --seed and its synthesis tag, so a rerun reproduces it and no two proxies share random numbers.
+        # The three splits are drawn one after another from the same generator, so they differ from each other.
+        rng = np.random.default_rng([seed, zlib.crc32(target_columns.encode())])
         for name, start, end in ranges:
             p = Path(output_dir) / "streams" / name
             p.mkdir(parents=True, exist_ok=True)
@@ -219,20 +225,20 @@ def process_omnilearned(input_raw, output_dir, target_columns):
 
                 from tqdm import tqdm
                 for i in tqdm(range(n_streams), desc=f"Generating {name} streams"):
-                    sigma_x = np.random.uniform(10.0, 30.0)
-                    sigma_y = np.random.uniform(1.0, 5.0)
-                    sigma_z = np.random.uniform(0.1, 2.0)
+                    sigma_x = rng.uniform(10.0, 30.0)
+                    sigma_y = rng.uniform(1.0, 5.0)
+                    sigma_z = rng.uniform(0.1, 2.0)
                     
                     sub_pid_reg[i] = [sigma_x, sigma_y, sigma_z]
                     
-                    x = np.random.normal(0, sigma_x, num_particles)
-                    y = np.random.normal(0, sigma_y, num_particles)
-                    z = np.random.normal(0, sigma_z, num_particles)
+                    x = rng.normal(0, sigma_x, num_particles)
+                    y = rng.normal(0, sigma_y, num_particles)
+                    z = rng.normal(0, sigma_z, num_particles)
                     points = np.vstack((x, y, z)).T
                     
                     
                     # random 3d rotation
-                    theta = np.random.uniform(0, 2 * np.pi, 3)
+                    theta = rng.uniform(0, 2 * np.pi, 3)
                     rx = np.array([[1, 0, 0], 
                                    [0, np.cos(theta[0]), -np.sin(theta[0])], 
                                    [0, np.sin(theta[0]), np.cos(theta[0])]])
@@ -277,15 +283,15 @@ def process_omnilearned(input_raw, output_dir, target_columns):
 
                 from tqdm import tqdm
                 for i in tqdm(range(n_streams), desc=f"Generating {name} streams"):
-                    a = np.random.uniform(0.5, 50.0)
+                    a = rng.uniform(0.5, 50.0)
 
                     sub_pid_reg[i] = [a]
 
                     # uniform points in the axis-aligned cube [-a/2, a/2]^3
-                    points = np.random.uniform(-a / 2.0, a / 2.0, size=(num_particles, 3))
+                    points = rng.uniform(-a / 2.0, a / 2.0, size=(num_particles, 3))
 
                     # random 3d rotation (same convention as ellipsoid branch)
-                    theta = np.random.uniform(0, 2 * np.pi, 3)
+                    theta = rng.uniform(0, 2 * np.pi, 3)
                     rx = np.array([[1, 0, 0],
                                    [0, np.cos(theta[0]), -np.sin(theta[0])],
                                    [0, np.sin(theta[0]), np.cos(theta[0])]])
@@ -327,16 +333,16 @@ def process_omnilearned(input_raw, output_dir, target_columns):
 
                 from tqdm import tqdm
                 for i in tqdm(range(n_streams), desc=f"Generating {name} streams"):
-                    r = np.random.uniform(0.5, 30.0)
+                    r = rng.uniform(0.5, 30.0)
 
                     sub_pid_reg[i] = [r]
 
                     # uniform-in-volume sampling inside a ball of radius r
                     # direction: uniform on the 2-sphere via normalized Gaussian
-                    dirs = np.random.normal(size=(num_particles, 3))
+                    dirs = rng.normal(size=(num_particles, 3))
                     dirs /= np.linalg.norm(dirs, axis=1, keepdims=True)
                     # magnitude: r * U^(1/3) gives uniform volume density
-                    radii = r * np.random.uniform(0.0, 1.0, size=num_particles) ** (1.0 / 3.0)
+                    radii = r * rng.uniform(0.0, 1.0, size=num_particles) ** (1.0 / 3.0)
                     sub_data[i] = dirs * radii[:, None]
 
                 stats_file = Path(output_dir) / "streams" / "bounded_ball_stats.npz"
@@ -367,12 +373,12 @@ def process_omnilearned(input_raw, output_dir, target_columns):
 
                 from tqdm import tqdm
                 for i in tqdm(range(n_streams), desc=f"Generating {name} streams"):
-                    sigma = np.random.uniform(0.5, 30.0)
+                    sigma = rng.uniform(0.5, 30.0)
 
                     sub_pid_reg[i] = [sigma]
 
                     # isotropic Gaussian: equal sigma on all 3 axes
-                    sub_data[i] = np.random.normal(0.0, sigma, size=(num_particles, 3))
+                    sub_data[i] = rng.normal(0.0, sigma, size=(num_particles, 3))
 
                 stats_file = Path(output_dir) / "streams" / "gaussian_ball_stats.npz"
 
@@ -402,21 +408,21 @@ def process_omnilearned(input_raw, output_dir, target_columns):
 
                 from tqdm import tqdm
                 for i in tqdm(range(n_streams), desc=f"Generating {name} streams"):
-                    a = np.random.uniform(10.0, 30.0)
-                    b = np.random.uniform(1.0, 5.0)
-                    c = np.random.uniform(0.1, 2.0)
+                    a = rng.uniform(10.0, 30.0)
+                    b = rng.uniform(1.0, 5.0)
+                    c = rng.uniform(0.1, 2.0)
 
                     sub_pid_reg[i] = [a, b, c]
 
                     # Uniform in the unit ball, then scaled per axis to fill the ellipsoid, which stays uniform because a diagonal scaling has a constant Jacobian.
-                    dirs = np.random.normal(size=(num_particles, 3))
+                    dirs = rng.normal(size=(num_particles, 3))
                     dirs /= np.linalg.norm(dirs, axis=1, keepdims=True)
-                    radii = np.random.uniform(0.0, 1.0, size=num_particles) ** (1.0 / 3.0)
+                    radii = rng.uniform(0.0, 1.0, size=num_particles) ** (1.0 / 3.0)
                     inside_unit_ball = dirs * radii[:, None]
                     points = inside_unit_ball * np.array([a, b, c])
 
                     # random 3d rotation (same convention as ellipsoid branch)
-                    theta = np.random.uniform(0, 2 * np.pi, 3)
+                    theta = rng.uniform(0, 2 * np.pi, 3)
                     rx = np.array([[1, 0, 0],
                                    [0, np.cos(theta[0]), -np.sin(theta[0])],
                                    [0, np.sin(theta[0]), np.cos(theta[0])]])
@@ -458,21 +464,21 @@ def process_omnilearned(input_raw, output_dir, target_columns):
 
                 from tqdm import tqdm
                 for i in tqdm(range(n_streams), desc=f"Generating {name} streams"):
-                    a = np.random.uniform(10.0, 30.0)
-                    b = np.random.uniform(1.0, 5.0)
-                    c = np.random.uniform(0.1, 2.0)
+                    a = rng.uniform(10.0, 30.0)
+                    b = rng.uniform(1.0, 5.0)
+                    c = rng.uniform(0.1, 2.0)
 
                     sub_pid_reg[i] = [a, b, c]
 
                     # uniform inside the axis-aligned box [-a, a] x [-b, b] x [-c, c]
                     points = np.stack([
-                        np.random.uniform(-a, a, num_particles),
-                        np.random.uniform(-b, b, num_particles),
-                        np.random.uniform(-c, c, num_particles),
+                        rng.uniform(-a, a, num_particles),
+                        rng.uniform(-b, b, num_particles),
+                        rng.uniform(-c, c, num_particles),
                     ], axis=1)
 
                     # random 3d rotation (same convention as ellipsoid / hard_ellipsoid)
-                    theta = np.random.uniform(0, 2 * np.pi, 3)
+                    theta = rng.uniform(0, 2 * np.pi, 3)
                     rx = np.array([[1, 0, 0],
                                    [0, np.cos(theta[0]), -np.sin(theta[0])],
                                    [0, np.sin(theta[0]), np.cos(theta[0])]])
@@ -549,7 +555,7 @@ if __name__ == "__main__":
     if args.target_model == 'deepsets':
         process_deepsets(args.input_raw, output_dir, TASKS[args.task]["label_key"])
     elif "omni" in args.target_model:
-        process_omnilearned(args.input_raw, output_dir, args.target_columns)
+        process_omnilearned(args.input_raw, output_dir, args.target_columns, args.seed)
         if args.shared_test_raw and args.target_columns in REAL_STREAM_COLUMNS:
             write_shared_test(args.shared_test_raw, output_dir)
 

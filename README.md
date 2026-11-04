@@ -117,9 +117,9 @@ done
 ```
 cd /path/to/Stream_Transfer_Learning
 for s in 40 100 300 1000; do
-    # OmniLearned from scratch: lr 5e-5 (default), plus 1e-5 and 1e-4
+    # OmniLearned from scratch: lr 5e-5 (default), plus 1e-5, 1e-4, 5e-4 and 1e-3
     DATASET_SIZE="$s" bash scripts/omnilearned/run_omnilearned_scratch_submission.sh
-    for lr in 1e-5 1e-4; do
+    for lr in 1e-5 1e-4 5e-4 1e-3; do
         LR="$lr" MODEL_SUFFIX="_lr$lr" DATASET_SIZE="$s" bash scripts/omnilearned/run_omnilearned_scratch_submission.sh
     done
 
@@ -130,8 +130,11 @@ for s in 40 100 300 1000; do
     PRETRAIN_SOURCE=camels  DATASET_SIZE="$s" bash scripts/omnilearned/run_omnicosmos_finetune_submission.sh
     PRETRAIN_SOURCE=quijote DATASET_SIZE="$s" bash scripts/omnilearned/run_omnicosmos_finetune_submission.sh
 
-    # DeepSets baseline (hidden 1024)
+    # DeepSets baseline (hidden 1024): lr 1e-3 (default), plus 1e-4, 5e-4, 5e-3 and 1e-2
     DATASET_SIZE="$s" bash scripts/run_deepsets_submission.sh
+    for lr in 1e-4 5e-4 5e-3 1e-2; do
+        LR="$lr" MODEL_SUFFIX="_lr$lr" DATASET_SIZE="$s" bash scripts/run_deepsets_submission.sh
+    done
 done
 ```
 

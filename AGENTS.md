@@ -108,7 +108,10 @@ pretraining tasks stay comparable.
 | `3d_x_y_z_eigenvalues_lambda1_10000` | `√λ₁` of the real-stream PCA |
 
 The six geometries come from [src/prepare_data.py](src/prepare_data.py) via
-[scripts/prepare_data_proxy_pretrain.sh](scripts/prepare_data_proxy_pretrain.sh). Three
+[scripts/prepare_data_proxy_pretrain.sh](scripts/prepare_data_proxy_pretrain.sh). Each is
+drawn from its own numpy Generator, seeded with `prepare_data.py --seed` (0 by default) and
+the crc32 of its synthesis tag, so regenerating a proxy reproduces it exactly and no two
+proxies share random numbers. Three
 of them are synthesised with **3 targets** (`3d_proxy_box`, `3d_proxy_hard_ellipsoid`,
 `3d_proxy_ellipsoid`), and three `src/make_*_from_*.py` slicers cut each down to its
 longest axis. The slicers infer the repo root from
