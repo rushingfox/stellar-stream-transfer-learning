@@ -1,7 +1,7 @@
 """Classical regression baseline using the PCA eigenvalues of each stream.
 
 Fits the target (the raw file's pid, log10(M*) for prog_mass) as a function of the three eigenvalues (λ1 ≥ λ2 ≥ λ3) of each stream's spatial covariance matrix.
-The fit is least squares on the train split (with polynomial features if --degree > 1), and --variant auto keeps the variant with the lower val MSE.
+The fit is least squares on the train split (with polynomial features if --degree > 1), with the power_law variant by default; --variant auto fits both and keeps the one with the lower val MSE.
 Two feature variants:
 
   linear   : features = [√λ1, √λ2, √λ3]  (linear in eigenvalue space)
@@ -18,8 +18,9 @@ Usage:
         --input_raw raw_data/prog_mass_reg_dataset_10000.h5 \\
         --output_dir prog_mass_3d_x_y_z_10000/eigenvalue_regression/run_0
 
-    # force a specific variant:
-    python src/eigenvalue_regression.py ... --variant power_law
+    # the linear variant, or whichever of the two has the lower val MSE:
+    python src/eigenvalue_regression.py ... --variant linear
+    python src/eigenvalue_regression.py ... --variant auto
 
     # all sizes from repo root:
     for size in 100 1000 10000; do
@@ -138,9 +139,9 @@ def parse_args():
                     help="Path to raw HDF5 dataset (prog_mass_reg_dataset_*.h5)")
     ap.add_argument("--output_dir", required=True,
                     help="Directory for results (loss_history.csv and fit_summary.txt)")
-    ap.add_argument("--variant", choices=["linear", "power_law", "auto"], default="auto",
-                    help="Feature variant: linear (√λ), power_law (log10(√λ)), "
-                         "auto=pick best val MSE (default)")
+    ap.add_argument("--variant", choices=["linear", "power_law", "auto"], default="power_law",
+                    help="Feature variant: linear (√λ), power_law (log10(√λ), default), "
+                         "auto=pick best val MSE")
     ap.add_argument("--degree", type=int, default=1,
                     help="Polynomial degree for features (default: 1)")
     ap.add_argument("--eval_input_raw", default=None,

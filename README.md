@@ -146,6 +146,7 @@ The DL models would evaluate their models on the shared test set just after the 
   ```
   cd /path/to/Stream_Transfer_Learning
   bash scripts/eval_shared_test10000_nonML.sh
+  module load conda
   mamba activate stream_transfer_learning
   for s in 40 100 300 1000; do
       for m in average eigenvalue_regression; do
