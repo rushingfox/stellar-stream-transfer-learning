@@ -63,8 +63,8 @@ e.g. `prog_mass_3d_x_y_z_300/omnilearned_scratch/run_0/`.
   `TASK` (default `prog_mass`, see [scripts/task_config.sh](scripts/task_config.sh)).
 - `dataset_size` ∈ `{40, 100, 300, 1000}` — the four sizes the paper reports. Size
   10000 exists only for its data: its test split is the shared test set, and its train
-  split feeds the eigenvalue proxy. [src/exp_paths.py](src/exp_paths.py)'s
-  `VALID_DATASET_SIZES` also still accepts the unused exploratory size 20.
+  split feeds the eigenvalue proxy. These five are all
+  [src/exp_paths.py](src/exp_paths.py)'s `VALID_DATASET_SIZES` accepts.
 - `target_columns` for the real-stream task is `3d_x_y_z`, the only input. The proxy
   pretraining datasets get their own top-level dirs without a task prefix (see below).
 - **Finetune data is shared per size**, in `<task>_<target_columns>_<size>/data/`: OmniLearned's

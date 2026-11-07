@@ -3,7 +3,7 @@ from pathlib import Path
 
 import numpy as np
 
-VALID_DATASET_SIZES = (20, 40, 100, 300, 1000, 10000)
+VALID_DATASET_SIZES = (40, 100, 300, 1000, 10000)
 
 # Regression tasks.
 # dir_prefix goes in front of the experiment folder name (<dir_prefix><target_columns>_<size>/), raw_prefix names raw_data/<raw_prefix>_<size>.h5, and label_key is the name of the target dataset in deepsets_dataset.h5.
