@@ -450,7 +450,7 @@ each run's R² and a summary in the appendix-table form, and writes nothing.
 
 [evaluation/reproduce_main_figure.ipynb](evaluation/reproduce_main_figure.ipynb) is the one
 place the paper's figures and table are made. Run top to bottom, it writes into
-`evaluation/` the main figure, the zoomed appendix figure (`r2_ymin=0.8`; the `_ymin08`
+`evaluation/` the main figure, the zoomed appendix figure (`r2_ymin=0.55`; the `_zoom`
 filename suffix keeps it from overwriting the main one), the appendix LaTeX table and the
 CSV. It needs **no raw data**: it reads each run's `shared_test10000/bootstrap.csv` in the
 result folders (from the result archive) and the sidecar
@@ -488,6 +488,11 @@ Conventions inside [src/build_results_table.py](src/build_results_table.py):
   gridlines are off, the regions get alternating shading and a boundary line, tick marks
   are removed and the labels read `N = 180`. Do not "fix" this into a log axis — the even
   spacing is deliberate and the styling exists to stop it being misread as a number line.
+- Within each size the points are placed by mean R², highest on the left, across all
+  categories, so each cluster reads as a ranking and a model's position differs between
+  sizes; the marker shape still shows the category. The rank tables set only the legend
+  and the LaTeX table order, and break ties in R². The zoomed figure uses the same
+  placement, with only the y-axis cropped.
 
 [src/proxy_gallery.py](src/proxy_gallery.py) writes all 16 gallery files with
 `--proxy_type all --input_raw raw_data/prog_mass_reg_dataset_10000.h5`. Vocabulary there

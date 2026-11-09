@@ -36,7 +36,7 @@ _PRETTY_MODEL_NAMES = {
     'proxy_gaussian_ellipsoid_sigmax': 'Gaussian Ellipsoid',
     'proxy_bounded_ellipsoid_a':       'Bounded Ellipsoid',
     'proxy_box_a':           'Box',
-    'proxy_stream_eigenvalues_lambda1': 'Real-Stream PCA',
+    'proxy_stream_eigenvalues_lambda1': r'Real-Stream PCA ($\lambda_1$)',
     # Optional models, not in the paper's default list.
     'OmniLearned_Scratch_M': 'OmniLearned-m (Scratch)',
     'OmniLearned_Finetune_M': 'OmniLearned-m (HEP Jets)',
@@ -155,7 +155,7 @@ _OPTIONAL_MODEL_COLORS = {
     'proxy_stream_eigenvalues_lambda3': '#7a0177',
 }
 
-# Order of the baselines in the legend, in each figure cluster and in the table.
+# Order of the baselines in the legend and in the table.
 _BASELINE_RANK = {
     'eigenvalue_regression': 1,
     'deepsets_vallr': 1.9,         # first DeepSets row of the table; the figure's only DeepSets point
@@ -579,23 +579,28 @@ def generate_scatter_plot(df, save_plot_path, r2_reference_var, r2_ymin=-0.3):
 
     x_mapping = {ds: i for i, ds in enumerate(datasets)}
 
-    # Same marker within a category and a color per model; drawing in category order also keeps each category's points together.
+    # Same marker within a category and a color per model; drawing in category order sets the legend order.
     ordered_styles = build_model_styles(models)
-    n_models = len(ordered_styles)
+    legend_rank = {m: i for i, (m, _, _) in enumerate(ordered_styles)}
 
-    if n_models > 1:
-        # Each dataset size owns 1.0 of x-space; the points spread over 0.7 of it, leaving a 0.15 gap on each side.
-        dodge_width = 0.7
-        offsets = np.linspace(-dodge_width / 2, dodge_width / 2, n_models)
-    else:
-        offsets = [0]
-    # Fixed width of the shaded bootstrap band, about the spacing between neighbouring models (dodge_width / (n_models - 1)).
+    # Each dataset size owns 1.0 of x-space; the points spread over 0.7 of it, leaving a 0.15 gap on each side.
+    dodge_width = 0.7
+    # Within each size the points go by R^2, highest on the left, so each cluster reads as a ranking; ties keep the legend order.
+    offsets = {}
+    for ds in datasets:
+        ds_rows = df[df['Dataset'] == ds]
+        ranked = sorted(zip(ds_rows['Model_Name'], ds_rows[y_col]),
+                        key=lambda mr: (-mr[1], legend_rank[mr[0]]))
+        slots = np.linspace(-dodge_width / 2, dodge_width / 2, len(ranked)) if len(ranked) > 1 else [0]
+        for (model, _), slot in zip(ranked, slots):
+            offsets[(model, ds)] = slot
+    # Fixed width of the shaded bootstrap band, about the spacing between neighbouring points (dodge_width / (points per size - 1)).
     band_width = 0.05
 
     # (x, y, error) of every drawn point, for the annotations added below.
     points = {}
 
-    for m_idx, (model, marker, color) in enumerate(ordered_styles):
+    for model, marker, color in ordered_styles:
         model_data = df[df['Model_Name'] == model]
         if model_data.empty:
             continue
@@ -603,7 +608,7 @@ def generate_scatter_plot(df, save_plot_path, r2_reference_var, r2_ymin=-0.3):
         x_vals, y_vals, y_errs, y_stats = [], [], [], []
 
         for _, row in model_data.iterrows():
-            x_vals.append(x_mapping[row['Dataset']] + offsets[m_idx])
+            x_vals.append(x_mapping[row['Dataset']] + offsets[(model, row['Dataset'])])
             y_vals.append(row[y_col])
             y_errs.append(row[error_col])
             if has_nested_error:
