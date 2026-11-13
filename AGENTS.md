@@ -444,7 +444,9 @@ while the CSV `Model` column and the plot legend use the display name.
 
 To look at specific runs without touching any figure, use
 [src/print_r2.py](src/print_r2.py): `python src/print_r2.py SIZE:MODEL[:RUNS] ...` prints
-each run's R² and a summary in the appendix-table form, and writes nothing.
+each run's R² and a summary in the appendix-table form, and writes nothing. Without
+`:RUNS` it reads the figure's runs at that size, and `--table` uses the same runs; both
+come from its `_FIGURE_RUNS`, which must match the notebook's `indices`.
 
 ## Figure generation
 
@@ -455,9 +457,14 @@ filename suffix keeps it from overwriting the main one), the appendix LaTeX tabl
 CSV. It needs **no raw data**: it reads each run's `shared_test10000/bootstrap.csv` in the
 result folders (from the result archive) and the sidecar
 `evaluation/prog_mass_labels_10000_test.npy` for `Var(y_test)`. Its settings are the
-paper's: R², seeds 0–2, y-axis floor −0.3, and nested error bars (`combine_errors=True`
-with `error_column="Test_Loss_Bootstrap_Std"`: outer = stat ⊕ syst, inner band = mean
-bootstrap std). The zoom pass writes no table, since the table does not depend on the
+paper's: R², seeds 0–9 at N = 24 and 60 and 0–2 at N = 180 and 600 (`indices`, a
+{dataset size: runs} dict; the training-free `eigenvalue_regression` has only `run_0`),
+y-axis floor −0.3, and nested error bars (`combine_errors=True`
+with `error_column="Test_Loss_Bootstrap_Std"`: outer = seed s.e.m. ⊕ mean bootstrap std,
+where the seed term is the sample std over seeds / √n and the bootstrap term is not
+divided by √n, because every seed is scored on the same test set and its sampling error
+does not average out; inner band = mean bootstrap std). The zoom pass writes no table,
+since the table does not depend on the
 y-axis crop. `build_results_table.py` makes only these R² outputs and has no command
 line; to look at numbers in the terminal, use [src/print_r2.py](src/print_r2.py).
 
@@ -493,6 +500,11 @@ Conventions inside [src/build_results_table.py](src/build_results_table.py):
   sizes; the marker shape still shows the category. The rank tables set only the legend
   and the LaTeX table order, and break ties in R². The zoomed figure uses the same
   placement, with only the y-axis cropped.
+- Both legends sit under the x-axis label, so the axes use the full figure width: the
+  Models legend in three rows (one column per category for the paper's 15 models), and
+  under it a grey key for the error bar, the bootstrap band, the dashed scratch line and
+  the star. The key's title gives the seeds per size, counted from the results (the most
+  seeds any model has at that size), so it follows `indices` without being told.
 
 [src/proxy_gallery.py](src/proxy_gallery.py) writes all 16 gallery files with
 `--proxy_type all --input_raw raw_data/prog_mass_reg_dataset_10000.h5`. Vocabulary there

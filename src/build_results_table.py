@@ -6,6 +6,10 @@ from collections import defaultdict
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
+from matplotlib.collections import LineCollection
+from matplotlib.container import ErrorbarContainer
+from matplotlib.legend_handler import HandlerErrorbar, HandlerPatch
+from matplotlib.lines import Line2D
 from matplotlib.patches import Rectangle
 import seaborn as sns
 from exp_paths import DEFAULT_TASK, dataset_key, get_run_dir
@@ -323,7 +327,7 @@ def summarize_model(repo_root, target_columns, dataset_size, target_model, indic
     `display_name`: the name in the CSV and plots; defaults to target_model.
     `test_csv_name`: the CSV inside each run dir (shared_test10000/bootstrap.csv in the notebook).
     `error_column`: the uncertainty column passed to load_one_run (Test_Loss_Bootstrap_Std in the notebook), or None.
-    `combine_errors`: with error_column, add the seed std to it in quadrature.
+    `combine_errors`: with error_column, add the standard error of the mean over seeds to it in quadrature.
     `task`: 'prog_mass' or 'subhalo', the experiment folder prefix.
     """
     val_list = []
@@ -371,9 +375,10 @@ def summarize_model(repo_root, target_columns, dataset_size, target_model, indic
         stat_error = float(np.mean(error_list))
 
         if combine_errors and len(test_list) > 1:
-            # total = sqrt(seed std^2 + stat^2); both are population stds, not divided by sqrt(n_runs).
-            seed_std_val = float(np.std(val_list))
-            seed_std_test = float(np.std(test_list))
+            # total = sqrt(seed s.e.m.^2 + stat^2): the seed term is the standard error of the mean over seeds (sample std / sqrt(n_runs)).
+            # stat is not divided by sqrt(n_runs), since every seed is scored on the same test set and its sampling error does not average out.
+            seed_std_val = float(np.std(val_list, ddof=1) / np.sqrt(len(val_list)))
+            seed_std_test = float(np.std(test_list, ddof=1) / np.sqrt(len(test_list)))
             total_val = float(np.sqrt(seed_std_val ** 2 + stat_error ** 2))
             total_test = float(np.sqrt(seed_std_test ** 2 + stat_error ** 2))
 
@@ -469,14 +474,18 @@ def select_sweep_lr(plot_rows, n_required, requested):
     - status: {(Dataset, swept model): (kind, text)} for every requested model, where kind is 'val', 'default', 'single' or 'missing' and text says which lr the figure shows; for report_sweep_selection.
 
     `plot_rows`: summarize_model's plot rows of every model.
-    `n_required`: the number of seeds a model needs to count as complete (len(indices)).
+    `n_required`: the number of seeds a model needs to count as complete: an int, or a {Dataset: int} dict when sizes have different seed counts.
     `requested`: the lrs asked for, from requested_sweeps.
     """
+    def _req(ds):
+        return n_required[ds] if isinstance(n_required, dict) else n_required
+
     rows = {(r["Dataset"], r["Model_Name"]): r for r in plot_rows}
-    complete = {key for key, r in rows.items() if r["n_indices"] == n_required}
+    complete = {(ds, m) for (ds, m), r in rows.items() if r["n_indices"] == _req(ds)}
 
     selected, val_rows, fallback_rows, status = {}, [], [], {}
     for (ds, base), names in requested.items():
+        req = _req(ds)
         names = sorted(names, key=lambda n: float(sweep_lr(n)))
         seeds = {n: rows[(ds, n)]["n_indices"] if (ds, n) in rows else 0 for n in names}
         if len(names) < 2:
@@ -484,7 +493,7 @@ def select_sweep_lr(plot_rows, n_required, requested):
             if seeds[only] == 0:
                 status[(ds, base)] = ("missing", f"not shown: lr {sweep_lr(only)}, the only lr requested, has no results")
             else:
-                note = "" if seeds[only] == n_required else f", {seeds[only]}/{n_required} seeds"
+                note = "" if seeds[only] == req else f", {seeds[only]}/{req} seeds"
                 status[(ds, base)] = ("single", f"lr {sweep_lr(only)}, the only lr requested (no sweep){note}")
             continue
         val_name = base + VAL_SELECTED_SUFFIX
@@ -497,7 +506,7 @@ def select_sweep_lr(plot_rows, n_required, requested):
             status[(ds, base)] = ("val", f"val-selected lr {sweep_lr(best['Model_Name'])}, "
                                          f"chosen from {', '.join(sweep_lr(n) for n in names)}")
             continue
-        unfinished = ", ".join(f"{sweep_lr(n)} has {seeds[n]}/{n_required} seeds"
+        unfinished = ", ".join(f"{sweep_lr(n)} has {seeds[n]}/{req} seeds"
                                for n in names if (ds, n) not in complete)
         default = next((n for n in names if _is_default_lr(n, base)), None)
         if default is not None and (ds, default) in complete:
@@ -543,6 +552,20 @@ def compute_test_label_variance_from_labels(labels_npy_path):
     `labels_npy_path`: the small .npy of test-split targets written by src/extract_r2_reference_labels.py, so R^2 needs no raw dataset.
     """
     return float(np.var(np.load(labels_npy_path).ravel()))
+
+
+def _seed_counts_text(df):
+    """Seed counts per size for the figure's key, e.g. '10 seeds at N = 24, 60; 3 seeds at N = 180, 600', from the most seeds any model has at each size."""
+    sizes_by_count = defaultdict(list)
+    for ds in df['Dataset'].unique():
+        sizes_by_count[int(df.loc[df['Dataset'] == ds, 'n_indices'].max())].append(_pretty_dataset_label(ds))
+    return "; ".join(f"{n} seed{'s' if n > 1 else ''} at N = {', '.join(labels)}" for n, labels in sizes_by_count.items())
+
+
+def _vertical_band(legend, orig_handle, xdescent, ydescent, width, height, fontsize):
+    """HandlerPatch patch_func drawing the bootstrap band's legend swatch upright and narrow, as the bands stand in the figure, e.g. 6 pt wide at fontsize 10."""
+    band_width = 0.6 * fontsize
+    return Rectangle((-xdescent + (width - band_width) / 2, -ydescent), band_width, height)
 
 
 def generate_scatter_plot(df, save_plot_path, r2_reference_var, r2_ymin=-0.3):
@@ -599,6 +622,8 @@ def generate_scatter_plot(df, save_plot_path, r2_reference_var, r2_ymin=-0.3):
 
     # (x, y, error) of every drawn point, for the annotations added below.
     points = {}
+    # One errorbar per model, in legend order, for the Models legend.
+    model_handles = []
 
     for model, marker, color in ordered_styles:
         model_data = df[df['Model_Name'] == model]
@@ -629,7 +654,7 @@ def generate_scatter_plot(df, save_plot_path, r2_reference_var, r2_ymin=-0.3):
                     zorder=3,
                 ))
 
-        plt.errorbar(
+        model_handles.append(plt.errorbar(
             x_vals, y_vals, yerr=y_errs,
             fmt=marker,
             color=color,
@@ -642,7 +667,7 @@ def generate_scatter_plot(df, save_plot_path, r2_reference_var, r2_ymin=-0.3):
             linestyle='none',
             alpha=0.85,
             zorder=4,
-        )
+        ))
 
     plt.xticks(range(len(datasets)), [f"N = {_pretty_dataset_label(d)}" for d in datasets],
                fontsize=12, fontweight='bold')
@@ -687,9 +712,49 @@ def generate_scatter_plot(df, save_plot_path, r2_reference_var, r2_ymin=-0.3):
                     ha='center', va='bottom', fontsize=11, color='0.35', zorder=5,
                     annotation_clip=True)
 
-    plt.legend(title="Models", bbox_to_anchor=(1.05, 1), loc='upper left', fontsize=10)
+    # Lay out the axes before adding the legends, so the axes keep the full figure width; savefig's tight bbox then takes in the legends hanging below.
     plt.tight_layout()
-    
+
+    # Both legends go under the x-axis label, the second right under the first; their offsets are measured on the drawn figure.
+    fig = plt.gcf()
+    fig.canvas.draw()
+    to_axes = ax.transAxes.inverted()
+    label_bottom = to_axes.transform(ax.xaxis.label.get_window_extent())[0][1]
+    # Three rows put each category of the paper's 15 models in its own column(s).
+    models_legend = ax.legend(handles=model_handles, title="Models", loc='upper center',
+                              bbox_to_anchor=(0.5, label_bottom - 0.02),
+                              ncol=int(np.ceil(len(model_handles) / 3)), fontsize=10)
+    ax.add_artist(models_legend)
+
+    # The second legend explains the error bars, the band and the annotations, in grey so it does not read as one more model.
+    grey = '0.45'
+    # Built by hand: an errorbar of empty data has no caps, and the legend copies only the caps it finds.
+    cap = Line2D([], [], marker='_', markersize=8, markeredgewidth=1.5, color=grey)
+    error_key = ErrorbarContainer(
+        (Line2D([], [], marker='o', linestyle='none', markersize=6, color=grey,
+                markeredgecolor='black', markeredgewidth=0.6),
+         (cap, cap),
+         (LineCollection([], colors=grey, linewidths=1.5),)),
+        has_yerr=True)
+    key_handles = [error_key]
+    key_labels = [r"Mean over seeds $\pm$ total (seed s.e.m. $\oplus$ bootstrap std)"]
+    band_key = Rectangle((0, 0), 1, 1, facecolor=grey, edgecolor='none', alpha=0.35)
+    if has_nested_error:
+        key_handles.append(band_key)
+        key_labels.append("Bootstrap std (mean over seeds)")
+    if scratch_ref is not None:
+        key_handles.append(Line2D([], [], color=style_of[scratch_ref][1], linestyle='--', linewidth=0.9, alpha=0.7))
+        key_labels.append(f"{_pretty_model_name(scratch_ref)} level")
+    key_handles.append(Line2D([], [], linestyle='none', marker=r'$\star$', color='0.35', markersize=6))
+    key_labels.append("Best mean at each N")
+    fig.canvas.draw()
+    models_bottom = to_axes.transform(models_legend.get_window_extent())[0][1]
+    ax.legend(handles=key_handles, labels=key_labels, title=f"Markers and error bars ({_seed_counts_text(df)})",
+              loc='upper center', bbox_to_anchor=(0.5, models_bottom - 0.02), ncol=len(key_handles), fontsize=10,
+              # A legend errorbar is drawn about a marker high by default, so the bar would hide behind the marker; a longer bar and a taller row make it show.
+              handler_map={error_key: HandlerErrorbar(yerr_size=1.1), band_key: HandlerPatch(patch_func=_vertical_band)},
+              handleheight=2.2)
+
     plt.savefig(save_plot_path, dpi=300, bbox_inches='tight')
     print(f"Saved scatter plot -> {save_plot_path}")
     pdf_plot_path = os.path.splitext(save_plot_path)[0] + '.pdf'
@@ -797,6 +862,9 @@ def generate_latex_table(df, r2_reference_var, save_path=None, selected_lr=None)
     return latex_str, display_df, best_mask
 
 
+_SINGLE_RUN_MODELS = {"eigenvalue_regression", "average"}
+
+
 def build_table(model_list, repo_root, epochs, indices, r2_reference_var, save_csv=None, save_scatter=None, save_latex=None, return_table_frames=False, test_csv_name="results/loss_history.csv", r2_ymin=-0.3, error_column=None, combine_errors=False, task=DEFAULT_TASK):
     """Builds the CSV, the main figure and the appendix table from a list of models; the notebook's entry point.
 
@@ -805,7 +873,7 @@ def build_table(model_list, repo_root, epochs, indices, r2_reference_var, save_c
     `model_list`: (target_columns, dataset_size, folder name, display name) tuples, one per model and size.
     `repo_root`: the repo root, where the experiment folders are.
     `epochs`: the epoch cutoff for picking the best-val row (see load_one_run).
-    `indices`: the run indices (seeds) to aggregate.
+    `indices`: the run indices (seeds) to aggregate, or a {dataset_size: indices} dict when sizes have different seed counts.
     `r2_reference_var`: Var(y_test), to turn MSE into R^2.
     `save_csv`, `save_scatter`, `save_latex`: output paths; None skips that output.
     `return_table_frames`: also return the table as DataFrames, for showing it in the notebook.
@@ -814,14 +882,19 @@ def build_table(model_list, repo_root, epochs, indices, r2_reference_var, save_c
     """
     display_rows = []
     plot_rows = []
+    n_required = {}
+    incomplete = []
 
     for target_columns, dataset_size, target_model, display_name in model_list:
+        ds_indices = indices[dataset_size] if isinstance(indices, dict) else indices
+        ds_key = dataset_key(target_columns, dataset_size, task)
+        n_required[ds_key] = len(ds_indices)
         result_display, result_plot = summarize_model(
             repo_root,
             target_columns,
             dataset_size,
             target_model,
-            indices,
+            ds_indices,
             epochs,
             display_name=display_name,
             test_csv_name=test_csv_name,
@@ -832,10 +905,18 @@ def build_table(model_list, repo_root, epochs, indices, r2_reference_var, save_c
         if result_display:
             display_rows.append(result_display)
             plot_rows.append(result_plot)
+        name = display_name or target_model
+        if target_model.lower() not in _SINGLE_RUN_MODELS and sweep_base(name) is None:
+            n_found = result_plot["n_indices"] if result_plot else 0
+            if n_found < len(ds_indices):
+                incomplete.append(f"{ds_key}+{name} ({n_found}/{len(ds_indices)} seeds)")
 
     if not display_rows:
         print("No valid results found (check paths / run_idx).")
         return (pd.DataFrame(), None, None) if return_table_frames else pd.DataFrame()
+
+    if incomplete:
+        warnings.warn("Incomplete seeds for non-swept model(s): " + ", ".join(incomplete), stacklevel=2)
 
     df = pd.DataFrame(display_rows)
     df = df.sort_values("_sort", ascending=True).reset_index(drop=True)
@@ -847,7 +928,7 @@ def build_table(model_list, repo_root, epochs, indices, r2_reference_var, save_c
 
     # lr sweeps: the table lists every lr, the figure one point per size (select_sweep_lr).
     requested = requested_sweeps(model_list, task)
-    selected_lr, val_selected_rows, fallback_rows, sweep_status = select_sweep_lr(plot_rows, len(indices), requested)
+    selected_lr, val_selected_rows, fallback_rows, sweep_status = select_sweep_lr(plot_rows, n_required, requested)
     report_sweep_selection(sweep_status)
     swept = {key for key, names in requested.items() if len(names) > 1}
 

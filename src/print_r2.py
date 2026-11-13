@@ -7,7 +7,7 @@
         300:omnilearned_proxy_gaussian_ball_finetune:0,1,2 \\
         300:eigenvalue_regression:0
 
-MODEL is the on-disk folder name; RUNS defaults to 0,1,2.
+MODEL is the on-disk folder name; RUNS defaults to the figure's runs at that SIZE (_FIGURE_RUNS: 0-9 at 40 and 100, 0-2 at 300 and 1000; 0 for eigenvalue_regression and average).
 Each run needs its shared-test evaluation and bootstrap; a missing file is an error, not a skipped run.
 --task picks the runs (prog_mass_ or subhalo_<target_columns>_<size>/) and that task's evaluation/<task>_labels_10000_test.npy.
 --compact prints only the summary, one line per model (N = training streams, 3/5 of SIZE; readable model names), with the same numbers.
@@ -29,6 +29,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT / "src"))
 
 from build_results_table import (  # noqa: E402
+    _SINGLE_RUN_MODELS,
     LR_SWEEPS,
     VAL_SELECTED_SUFFIX,
     compute_test_label_variance_from_labels,
@@ -87,8 +88,10 @@ _TASK_TARGETS = {
 # The scratch runner's default epochs, spelled out in its --compact name (as each lr sweep's default lr is, from build_results_table.LR_SWEEPS) so it compares with the _ep<N> variants.
 _SCRATCH_DEFAULT_EPOCHS = "100"
 
+# The runs (seeds) of the figure and table at each size; must match `indices` in evaluation/reproduce_main_figure.ipynb.
+_FIGURE_RUNS = {40: range(10), 100: range(10), 300: range(3), 1000: range(3)}
 # --table: the columns and rows of the appendix table (evaluation/reproduce_main_figure.ipynb), the rows as (folder, name) in table order.
-_TABLE_SIZES = (40, 100, 300, 1000)
+_TABLE_SIZES = tuple(_FIGURE_RUNS)
 def _sweep_rows(base):
     """Gives the --table rows of one lr sweep.
 
@@ -143,10 +146,26 @@ def display_name(folder):
     return ", ".join([name] + details)
 
 
+def figure_runs(model, size):
+    """Gives the runs the figure and table use for one model at one size.
+
+    Returns a list of run indices, e.g. [0, ..., 9] for omnilearned_scratch at 40 and [0] for eigenvalue_regression; exits if the size has no entry in _FIGURE_RUNS.
+
+    `model`: the on-disk model folder name.
+    `size`: the dataset size.
+    """
+    if model in _SINGLE_RUN_MODELS:
+        return [0]
+    if size not in _FIGURE_RUNS:
+        raise SystemExit(f"No default RUNS for size {size} (_FIGURE_RUNS has {', '.join(map(str, _FIGURE_RUNS))}); "
+                         f"give them as SIZE:MODEL:RUNS")
+    return list(_FIGURE_RUNS[size])
+
+
 def parse_spec(spec):
     """Parses one SIZE:MODEL[:RUNS] argument.
 
-    Returns (size, model folder, run indices), the runs [0, 1, 2] if not given; exits with a message on a malformed spec.
+    Returns (size, model folder, run indices), the figure's runs at that size (figure_runs) if not given; exits with a message on a malformed spec.
 
     `spec`: e.g. '300:omnilearned_scratch:0,1,2'.
     """
@@ -154,8 +173,9 @@ def parse_spec(spec):
     if len(parts) not in (2, 3) or not all(parts[:2]):
         raise SystemExit(f"Bad spec '{spec}': expected SIZE:MODEL[:RUNS], e.g. 300:omnilearned_scratch:0,1,2")
     size = validate_dataset_size(parts[0])
-    runs = [0, 1, 2]
-    if len(parts) == 3:
+    if len(parts) == 2:
+        runs = figure_runs(parts[1], size)
+    else:
         try:
             runs = [int(r) for r in parts[2].split(",")]
         except ValueError:
@@ -230,7 +250,7 @@ def report(target_columns, size, model, runs, var, task, compact_width=None):
         ep_str = f"{ep[0]:>3}/{ep[1]:<3}" if ep else "   —   "
         print(f"  run_{idx}: best-val epoch {ep_str}  R2 {r2:.3f}   (bootstrap {boot / var:.3f})")
 
-    # Same call as the appendix table: total is the cross-run std and the mean bootstrap std added in quadrature.
+    # Same call as the appendix table: total is the standard error of the mean over runs and the mean bootstrap std added in quadrature.
     _, row = summarize_model(REPO_ROOT, target_columns, size, model, runs, NO_EPOCH_CUTOFF,
                              test_csv_name=f"{shared_test_dirname()}/{BOOTSTRAP_CSV}",
                              error_column="Test_Loss_Bootstrap_Std", combine_errors=True, task=task)
@@ -255,19 +275,19 @@ def print_table(target_columns, var, task):
     `var`: Var(y_test), to turn MSE into R^2.
     `task`: 'prog_mass' or 'subhalo'.
     """
-    runs = [0, 1, 2]  # the figure's seeds
     model_list = [(target_columns, size, folder, folder) for size in _TABLE_SIZES
                   for folder, _ in _TABLE_MODELS if folder not in _VAL_SELECTED_FOLDERS]
     rows = []  # plot rows of summarize_model, for select_sweep_lr
     for _, size, folder, _ in model_list:
-        _, row = summarize_model(REPO_ROOT, target_columns, size, folder, runs, NO_EPOCH_CUTOFF,
+        _, row = summarize_model(REPO_ROOT, target_columns, size, folder, figure_runs(folder, size), NO_EPOCH_CUTOFF,
                                  display_name=folder,
                                  test_csv_name=f"{shared_test_dirname()}/{BOOTSTRAP_CSV}",
                                  error_column="Test_Loss_Bootstrap_Std", combine_errors=True, task=task)
         if row is not None:
             rows.append({**row, "folder": folder, "size": size,
                          "r2": 1.0 - row["Mean Test MSE"] / var, "total": row["Std Test MSE"] / var})
-    selected, val_rows, _, status = select_sweep_lr(rows, len(runs), requested_sweeps(model_list, task))
+    n_required = {dataset_key(target_columns, size, task): len(_FIGURE_RUNS[size]) for size in _TABLE_SIZES}
+    selected, val_rows, _, status = select_sweep_lr(rows, n_required, requested_sweeps(model_list, task))
     report_sweep_selection(status, problems_only=True)
     best = {size: max(r["r2"] for r in rows if r["size"] == size) for size in _TABLE_SIZES}
     cell = {(r["folder"], r["size"]): f"{r['r2']:.3f} ± {r['total']:.3f}"
@@ -282,6 +302,8 @@ def print_table(target_columns, var, task):
     width = max(len(name) for _, name in _TABLE_MODELS)
     print(f"task: {task} | R2 ± total on {shared_test_dirname()} | "
           f"* best mean per column, † the lr with the lowest mean best-val loss in each lr sweep")
+    print("seeds: " + " | ".join(f"N = {int(size * 0.6)}: {min(runs)}-{max(runs)}" for size, runs in _FIGURE_RUNS.items())
+          + " (eigenvalue_regression: run 0 only)")
     print(f"{'model':<{width}}" + "".join(f"  {'N = ' + str(int(size * 0.6)):<15}" for size in _TABLE_SIZES))
     for folder, name in _TABLE_MODELS:
         print(f"{name:<{width}}" + "".join(f"  {cell.get((folder, size), '--'):<15}" for size in _TABLE_SIZES))
