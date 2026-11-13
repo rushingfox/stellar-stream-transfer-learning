@@ -452,20 +452,16 @@ come from its `_FIGURE_RUNS`, which must match the notebook's `indices`.
 
 [evaluation/reproduce_main_figure.ipynb](evaluation/reproduce_main_figure.ipynb) is the one
 place the paper's figures and table are made. Run top to bottom, it writes into
-`evaluation/` the main figure, the zoomed appendix figure (`r2_ymin=0.55`; the `_zoom`
-filename suffix keeps it from overwriting the main one), the appendix LaTeX table and the
-CSV. It needs **no raw data**: it reads each run's `shared_test10000/bootstrap.csv` in the
+`evaluation/` the main figure, the appendix LaTeX table and the CSV. It needs **no raw data**: it reads each run's `shared_test10000/bootstrap.csv` in the
 result folders (from the result archive) and the sidecar
 `evaluation/prog_mass_labels_10000_test.npy` for `Var(y_test)`. Its settings are the
 paper's: R², seeds 0–9 at N = 24 and 60 and 0–2 at N = 180 and 600 (`indices`, a
 {dataset size: runs} dict; the training-free `eigenvalue_regression` has only `run_0`),
-y-axis floor −0.3, and nested error bars (`combine_errors=True`
+a y-axis from 0 to 1 (`r2_ymin`, 0 by default), and nested error bars (`combine_errors=True`
 with `error_column="Test_Loss_Bootstrap_Std"`: outer = seed s.e.m. ⊕ mean bootstrap std,
 where the seed term is the sample std over seeds / √n and the bootstrap term is not
 divided by √n, because every seed is scored on the same test set and its sampling error
-does not average out; inner band = mean bootstrap std). The zoom pass writes no table,
-since the table does not depend on the
-y-axis crop. `build_results_table.py` makes only these R² outputs and has no command
+does not average out; inner band = mean bootstrap std). `build_results_table.py` makes only these R² outputs and has no command
 line; to look at numbers in the terminal, use [src/print_r2.py](src/print_r2.py).
 
 Conventions inside [src/build_results_table.py](src/build_results_table.py):
@@ -498,8 +494,11 @@ Conventions inside [src/build_results_table.py](src/build_results_table.py):
 - Within each size the points are placed by mean R², highest on the left, across all
   categories, so each cluster reads as a ranking and a model's position differs between
   sizes; the marker shape still shows the category. The rank tables set only the legend
-  and the LaTeX table order, and break ties in R². The zoomed figure uses the same
-  placement, with only the y-axis cropped.
+  and the LaTeX table order, and break ties in R².
+- A model with mean R² below 0 (worse than predicting the test mean) is drawn as a hollow
+  marker at 0, without error bar or band, so the y-axis can start at 0; the threshold is
+  always 0, whatever `r2_ymin` is. Only the figure does this: the table and the CSV keep
+  the real value. The key then gets a hollow-marker entry saying so.
 - Both legends sit under the x-axis label, so the axes use the full figure width: the
   Models legend in three rows (one column per category for the paper's 15 models), and
   under it a grey key for the error bar, the bootstrap band, the dashed scratch line and

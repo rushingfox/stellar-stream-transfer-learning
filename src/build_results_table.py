@@ -568,7 +568,7 @@ def _vertical_band(legend, orig_handle, xdescent, ydescent, width, height, fonts
     return Rectangle((-xdescent + (width - band_width) / 2, -ydescent), band_width, height)
 
 
-def generate_scatter_plot(df, save_plot_path, r2_reference_var, r2_ymin=-0.3):
+def generate_scatter_plot(df, save_plot_path, r2_reference_var, r2_ymin=0.0):
     """Draws the main figure, the test R^2 of each model at each dataset size, as PNG and PDF.
 
     Returns nothing; does nothing if df is empty.
@@ -594,6 +594,10 @@ def generate_scatter_plot(df, save_plot_path, r2_reference_var, r2_ymin=-0.3):
     df[error_col] = df[error_col] / r2_reference_var
     if has_nested_error:
         df[stat_col] = df[stat_col] / r2_reference_var
+    # A model below R^2 = 0, worse than predicting the test mean, is drawn hollow at 0 without error bar or band, so the y-axis can start at 0.
+    # The table keeps its real value.
+    df['Below Zero'] = df[y_col] < 0
+    df.loc[df['Below Zero'], [y_col, error_col] + ([stat_col] if has_nested_error else [])] = 0.0
 
     plt.figure(figsize=(12, 5.5))
 
@@ -631,14 +635,20 @@ def generate_scatter_plot(df, save_plot_path, r2_reference_var, r2_ymin=-0.3):
             continue
 
         x_vals, y_vals, y_errs, y_stats = [], [], [], []
+        # x of the points below R^2 = 0, drawn hollow at 0 instead of with the error bars.
+        below_zero_x = []
 
         for _, row in model_data.iterrows():
-            x_vals.append(x_mapping[row['Dataset']] + offsets[(model, row['Dataset'])])
+            x = x_mapping[row['Dataset']] + offsets[(model, row['Dataset'])]
+            points[(model, row['Dataset'])] = (x, row[y_col], row[error_col])
+            if row['Below Zero']:
+                below_zero_x.append(x)
+                continue
+            x_vals.append(x)
             y_vals.append(row[y_col])
             y_errs.append(row[error_col])
             if has_nested_error:
                 y_stats.append(row[stat_col])
-            points[(model, row['Dataset'])] = (x_vals[-1], y_vals[-1], y_errs[-1])
 
         if has_nested_error:
             # The bootstrap part as a translucent band rather than a second error bar, which reads better and stays visible when short.
@@ -668,6 +678,11 @@ def generate_scatter_plot(df, save_plot_path, r2_reference_var, r2_ymin=-0.3):
             alpha=0.85,
             zorder=4,
         ))
+        if below_zero_x:
+            # clip_on off, so the whole marker shows on the bottom edge rather than only its upper half.
+            plt.plot(below_zero_x, [0.0] * len(below_zero_x), linestyle='none', marker=marker, markersize=8,
+                     markerfacecolor='none', markeredgecolor=color, markeredgewidth=1.5,
+                     alpha=0.85, zorder=4, clip_on=False)
 
     plt.xticks(range(len(datasets)), [f"N = {_pretty_dataset_label(d)}" for d in datasets],
                fontsize=12, fontweight='bold')
@@ -688,8 +703,8 @@ def generate_scatter_plot(df, save_plot_path, r2_reference_var, r2_ymin=-0.3):
 
     plt.xlabel("Fine-Tuning dataset size", fontsize=14, fontweight='bold')
     plt.ylabel("Test R²", fontsize=14, fontweight='bold')
-    # R^2 cannot exceed 1; a little headroom keeps the best-model star, drawn above the error bar, inside the frame.
-    plt.ylim(bottom=r2_ymin, top=1.0 + 0.03 * (1.0 - r2_ymin))
+    # R^2 cannot exceed 1, so the axis ends there; a best-model star near the top may sit on the frame.
+    plt.ylim(bottom=r2_ymin, top=1.0)
 
     style_of = {m: (marker, color) for m, marker, color in ordered_styles}
     # Dashed line across each size's region at the scratch value (the val-selected lr if swept), so every point reads as above or below scratch.
@@ -737,20 +752,25 @@ def generate_scatter_plot(df, save_plot_path, r2_reference_var, r2_ymin=-0.3):
          (LineCollection([], colors=grey, linewidths=1.5),)),
         has_yerr=True)
     key_handles = [error_key]
-    key_labels = [r"Mean over seeds $\pm$ total (seed s.e.m. $\oplus$ bootstrap std)"]
+    key_labels = [r"Mean (over seeds) $\pm$ total uncertainty (seed std$/\sqrt{n}$ $\oplus$ bootstrap std)"]
     band_key = Rectangle((0, 0), 1, 1, facecolor=grey, edgecolor='none', alpha=0.35)
     if has_nested_error:
         key_handles.append(band_key)
-        key_labels.append("Bootstrap std (mean over seeds)")
+        key_labels.append("Bootstrap std (averaged over seeds)")
     if scratch_ref is not None:
         key_handles.append(Line2D([], [], color=style_of[scratch_ref][1], linestyle='--', linewidth=0.9, alpha=0.7))
         key_labels.append(f"{_pretty_model_name(scratch_ref)} level")
     key_handles.append(Line2D([], [], linestyle='none', marker=r'$\star$', color='0.35', markersize=6))
     key_labels.append("Best mean at each N")
+    if df['Below Zero'].any():
+        key_handles.append(Line2D([], [], linestyle='none', marker='o', markersize=6, markerfacecolor='none',
+                                  markeredgecolor=grey, markeredgewidth=1.5))
+        key_labels.append(r"$R^2 < 0$, drawn at 0 without error bar")
     fig.canvas.draw()
     models_bottom = to_axes.transform(models_legend.get_window_extent())[0][1]
     ax.legend(handles=key_handles, labels=key_labels, title=f"Markers and error bars ({_seed_counts_text(df)})",
-              loc='upper center', bbox_to_anchor=(0.5, models_bottom - 0.02), ncol=len(key_handles), fontsize=10,
+              # At most 3 columns, so the key never grows wider than the figure.
+              loc='upper center', bbox_to_anchor=(0.5, models_bottom - 0.02), ncol=min(len(key_handles), 3), fontsize=10,
               # A legend errorbar is drawn about a marker high by default, so the bar would hide behind the marker; a longer bar and a taller row make it show.
               handler_map={error_key: HandlerErrorbar(yerr_size=1.1), band_key: HandlerPatch(patch_func=_vertical_band)},
               handleheight=2.2)
@@ -865,7 +885,7 @@ def generate_latex_table(df, r2_reference_var, save_path=None, selected_lr=None)
 _SINGLE_RUN_MODELS = {"eigenvalue_regression", "average"}
 
 
-def build_table(model_list, repo_root, epochs, indices, r2_reference_var, save_csv=None, save_scatter=None, save_latex=None, return_table_frames=False, test_csv_name="results/loss_history.csv", r2_ymin=-0.3, error_column=None, combine_errors=False, task=DEFAULT_TASK):
+def build_table(model_list, repo_root, epochs, indices, r2_reference_var, save_csv=None, save_scatter=None, save_latex=None, return_table_frames=False, test_csv_name="results/loss_history.csv", r2_ymin=0.0, error_column=None, combine_errors=False, task=DEFAULT_TASK):
     """Builds the CSV, the main figure and the appendix table from a list of models; the notebook's entry point.
 
     Returns df_out, the CSV table (empty if no run has a result); with return_table_frames, (df_out, table_df, best_mask).
