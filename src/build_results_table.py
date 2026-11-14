@@ -8,7 +8,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.collections import LineCollection
 from matplotlib.container import ErrorbarContainer
-from matplotlib.legend_handler import HandlerErrorbar, HandlerPatch
+from matplotlib.legend_handler import HandlerErrorbar
 from matplotlib.lines import Line2D
 from matplotlib.patches import Rectangle
 import seaborn as sns
@@ -554,18 +554,9 @@ def compute_test_label_variance_from_labels(labels_npy_path):
     return float(np.var(np.load(labels_npy_path).ravel()))
 
 
-def _seed_counts_text(df):
-    """Seed counts per size for the figure's key, e.g. '10 seeds at N = 24, 60; 3 seeds at N = 180, 600', from the most seeds any model has at each size."""
-    sizes_by_count = defaultdict(list)
-    for ds in df['Dataset'].unique():
-        sizes_by_count[int(df.loc[df['Dataset'] == ds, 'n_indices'].max())].append(_pretty_dataset_label(ds))
-    return "; ".join(f"{n} seed{'s' if n > 1 else ''} at N = {', '.join(labels)}" for n, labels in sizes_by_count.items())
-
-
-def _vertical_band(legend, orig_handle, xdescent, ydescent, width, height, fontsize):
-    """HandlerPatch patch_func drawing the bootstrap band's legend swatch upright and narrow, as the bands stand in the figure, e.g. 6 pt wide at fontsize 10."""
-    band_width = 0.6 * fontsize
-    return Rectangle((-xdescent + (width - band_width) / 2, -ydescent), band_width, height)
+def _seed_counts(df):
+    """Seeds per size for the x tick labels, e.g. {'prog_mass_3d_x_y_z_40': 10, ...}, the most any model has at that size."""
+    return {ds: int(df.loc[df['Dataset'] == ds, 'n_indices'].max()) for ds in df['Dataset'].unique()}
 
 
 def generate_scatter_plot(df, save_plot_path, r2_reference_var, r2_ymin=0.0):
@@ -594,12 +585,13 @@ def generate_scatter_plot(df, save_plot_path, r2_reference_var, r2_ymin=0.0):
     df[error_col] = df[error_col] / r2_reference_var
     if has_nested_error:
         df[stat_col] = df[stat_col] / r2_reference_var
-    # A model below R^2 = 0, worse than predicting the test mean, is drawn hollow at 0 without error bar or band, so the y-axis can start at 0.
-    # The table keeps its real value.
+    # A model below R^2 = 0, worse than predicting the test mean, is drawn at 0 without error bar or band, so the y-axis can start at 0.
+    # The table keeps its real value, and the paper's caption says how these points are drawn.
     df['Below Zero'] = df[y_col] < 0
     df.loc[df['Below Zero'], [y_col, error_col] + ([stat_col] if has_nested_error else [])] = 0.0
 
     plt.figure(figsize=(12, 5.5))
+    ax = plt.gca()
 
     datasets = df['Dataset'].unique()
     models = df['Model_Name'].unique()
@@ -607,15 +599,18 @@ def generate_scatter_plot(df, save_plot_path, r2_reference_var, r2_ymin=0.0):
     x_mapping = {ds: i for i, ds in enumerate(datasets)}
 
     # Same marker within a category and a color per model; drawing in category order sets the legend order.
+    # Every model goes in, the scratch reference too, so that no color depends on how scratch is drawn.
     ordered_styles = build_model_styles(models)
     legend_rank = {m: i for i, (m, _, _) in enumerate(ordered_styles)}
+    # OmniLearned scratch (the val-selected lr if swept) is the reference every pretraining is compared with, so it is a band across each size rather than a point.
+    scratch_ref = next((m for m in (VAL_SELECTED_SCRATCH_MODEL, SCRATCH_MODEL) if m in models), None)
 
     # Each dataset size owns 1.0 of x-space; the points spread over 0.7 of it, leaving a 0.15 gap on each side.
     dodge_width = 0.7
     # Within each size the points go by R^2, highest on the left, so each cluster reads as a ranking; ties keep the legend order.
     offsets = {}
     for ds in datasets:
-        ds_rows = df[df['Dataset'] == ds]
+        ds_rows = df[(df['Dataset'] == ds) & (df['Model_Name'] != scratch_ref)]
         ranked = sorted(zip(ds_rows['Model_Name'], ds_rows[y_col]),
                         key=lambda mr: (-mr[1], legend_rank[mr[0]]))
         slots = np.linspace(-dodge_width / 2, dodge_width / 2, len(ranked)) if len(ranked) > 1 else [0]
@@ -623,24 +618,23 @@ def generate_scatter_plot(df, save_plot_path, r2_reference_var, r2_ymin=0.0):
             offsets[(model, ds)] = slot
     # Fixed width of the shaded bootstrap band, about the spacing between neighbouring points (dodge_width / (points per size - 1)).
     band_width = 0.05
+    # Greys of the scratch band, shared with the legend: outer band = total uncertainty, inner band = bootstrap std, line = mean.
+    total_grey, stat_grey, line_grey = '0.85', '0.68', '0.3'
 
-    # (x, y, error) of every drawn point, for the annotations added below.
-    points = {}
-    # One errorbar per model, in legend order, for the Models legend.
+    # One errorbar per drawn model, in legend order, for the legend.
     model_handles = []
 
     for model, marker, color in ordered_styles:
         model_data = df[df['Model_Name'] == model]
-        if model_data.empty:
+        if model_data.empty or model == scratch_ref:
             continue
 
         x_vals, y_vals, y_errs, y_stats = [], [], [], []
-        # x of the points below R^2 = 0, drawn hollow at 0 instead of with the error bars.
+        # x of the points below R^2 = 0, drawn at 0 without error bar or band.
         below_zero_x = []
 
         for _, row in model_data.iterrows():
             x = x_mapping[row['Dataset']] + offsets[(model, row['Dataset'])]
-            points[(model, row['Dataset'])] = (x, row[y_col], row[error_col])
             if row['Below Zero']:
                 below_zero_x.append(x)
                 continue
@@ -653,7 +647,6 @@ def generate_scatter_plot(df, save_plot_path, r2_reference_var, r2_ymin=0.0):
         if has_nested_error:
             # The bootstrap part as a translucent band rather than a second error bar, which reads better and stays visible when short.
             # Drawn at a lower zorder, so the marker and the outer bar sit on top.
-            ax = plt.gca()
             for xv, yv, sv in zip(x_vals, y_vals, y_stats):
                 ax.add_patch(Rectangle(
                     (xv - band_width / 2, yv - sv),
@@ -664,33 +657,39 @@ def generate_scatter_plot(df, save_plot_path, r2_reference_var, r2_ymin=0.0):
                     zorder=3,
                 ))
 
+        marker_style = dict(marker=marker, color=color, markersize=8, markeredgecolor='black',
+                            markeredgewidth=0.6, linestyle='none', alpha=0.85, zorder=4)
         model_handles.append(plt.errorbar(
             x_vals, y_vals, yerr=y_errs,
-            fmt=marker,
-            color=color,
             label=_pretty_model_name(model),
             capsize=5,
             elinewidth=1.5,
-            markersize=8,
-            markeredgecolor='black',
-            markeredgewidth=0.6,
-            linestyle='none',
-            alpha=0.85,
-            zorder=4,
+            **marker_style,
         ))
         if below_zero_x:
             # clip_on off, so the whole marker shows on the bottom edge rather than only its upper half.
-            plt.plot(below_zero_x, [0.0] * len(below_zero_x), linestyle='none', marker=marker, markersize=8,
-                     markerfacecolor='none', markeredgecolor=color, markeredgewidth=1.5,
-                     alpha=0.85, zorder=4, clip_on=False)
+            plt.plot(below_zero_x, [0.0] * len(below_zero_x), clip_on=False, **marker_style)
 
-    plt.xticks(range(len(datasets)), [f"N = {_pretty_dataset_label(d)}" for d in datasets],
+    if scratch_ref is not None:
+        # The scratch band spans its whole size region: the mean as a line, the total uncertainty as the outer band and the bootstrap std as the inner one.
+        for _, row in df[df['Model_Name'] == scratch_ref].iterrows():
+            i = x_mapping[row['Dataset']]
+            span = [i - 0.5, i + 0.5]
+            y = row[y_col]
+            ax.fill_between(span, y - row[error_col], y + row[error_col], color=total_grey, linewidth=0, zorder=1)
+            if has_nested_error:
+                ax.fill_between(span, y - row[stat_col], y + row[stat_col], color=stat_grey, linewidth=0, zorder=1)
+            ax.hlines(y, *span, colors=line_grey, linewidth=1.5, zorder=2)
+
+    # Each size's tick also gives its number of seeds, the most any model has at that size.
+    seeds = _seed_counts(df)
+    plt.xticks(range(len(datasets)),
+               [f"N = {_pretty_dataset_label(d)}\n({seeds[d]} seed{'s' if seeds[d] > 1 else ''})" for d in datasets],
                fontsize=12, fontweight='bold')
 
     # The dataset sizes are categories, drawn evenly spaced although their ratios differ.
     # So the x-axis must not look like a number line: no vertical gridlines (they would run through each cluster) and no tick marks, but a boundary line between sizes and alternating shading.
     # Horizontal gridlines stay, since the y-values are read against them.
-    ax = plt.gca()
     ax.xaxis.grid(False)
     ax.tick_params(axis='x', length=0)
     ax.set_xlim(-0.5, len(datasets) - 0.5)
@@ -703,78 +702,37 @@ def generate_scatter_plot(df, save_plot_path, r2_reference_var, r2_ymin=0.0):
 
     plt.xlabel("Fine-Tuning dataset size", fontsize=14, fontweight='bold')
     plt.ylabel("Test R²", fontsize=14, fontweight='bold')
-    # R^2 cannot exceed 1, so the axis ends there; a best-model star near the top may sit on the frame.
+    # R^2 cannot exceed 1, so the axis ends there.
     plt.ylim(bottom=r2_ymin, top=1.0)
 
-    style_of = {m: (marker, color) for m, marker, color in ordered_styles}
-    # Dashed line across each size's region at the scratch value (the val-selected lr if swept), so every point reads as above or below scratch.
-    scratch_ref = next((m for m in (VAL_SELECTED_SCRATCH_MODEL, SCRATCH_MODEL) if m in style_of), None)
+    # One legend inside the axes, in the empty lower right (below the baselines at the two largest sizes).
+    # It lists the scratch band, every drawn model and the two uncertainties, which the paper's caption defines.
+    handles, labels = [], []
     if scratch_ref is not None:
-        for ds, i in x_mapping.items():
-            if (scratch_ref, ds) in points:
-                ax.hlines(points[(scratch_ref, ds)][1], i - 0.5, i + 0.5,
-                          colors=style_of[scratch_ref][1], linestyles='--',
-                          linewidth=0.9, alpha=0.7, zorder=2)
-
-    # A small star above the best mean at each size, matching the bold cell of the LaTeX table.
-    for ds in datasets:
-        ds_points = {m: p for (m, d), p in points.items() if d == ds}
-        if not ds_points:
-            continue
-        best = max(ds_points, key=lambda m: ds_points[m][1])
-        x, y, err = ds_points[best]
-        ax.annotate(r"$\star$", xy=(x, y + err), xytext=(0, 2), textcoords='offset points',
-                    ha='center', va='bottom', fontsize=11, color='0.35', zorder=5,
-                    annotation_clip=True)
-
-    # Lay out the axes before adding the legends, so the axes keep the full figure width; savefig's tight bbox then takes in the legends hanging below.
-    plt.tight_layout()
-
-    # Both legends go under the x-axis label, the second right under the first; their offsets are measured on the drawn figure.
-    fig = plt.gcf()
-    fig.canvas.draw()
-    to_axes = ax.transAxes.inverted()
-    label_bottom = to_axes.transform(ax.xaxis.label.get_window_extent())[0][1]
-    # Three rows put each category of the paper's 15 models in its own column(s).
-    models_legend = ax.legend(handles=model_handles, title="Models", loc='upper center',
-                              bbox_to_anchor=(0.5, label_bottom - 0.02),
-                              ncol=int(np.ceil(len(model_handles) / 3)), fontsize=10)
-    ax.add_artist(models_legend)
-
-    # The second legend explains the error bars, the band and the annotations, in grey so it does not read as one more model.
-    grey = '0.45'
+        handles.append((Rectangle((0, 0), 1, 1, facecolor=total_grey, edgecolor='none'),
+                        Line2D([], [], color=line_grey, linewidth=1.5)))
+        labels.append(_pretty_model_name(scratch_ref))
+    handles += model_handles
+    labels += [h.get_label() for h in model_handles]
     # Built by hand: an errorbar of empty data has no caps, and the legend copies only the caps it finds.
-    cap = Line2D([], [], marker='_', markersize=8, markeredgewidth=1.5, color=grey)
+    grey = '0.45'
+    cap = Line2D([], [], marker='_', markersize=6, markeredgewidth=1.2, color=grey)
     error_key = ErrorbarContainer(
-        (Line2D([], [], marker='o', linestyle='none', markersize=6, color=grey,
-                markeredgecolor='black', markeredgewidth=0.6),
+        (Line2D([], [], marker='o', linestyle='none', markersize=4, color=grey,
+                markeredgecolor='black', markeredgewidth=0.5),
          (cap, cap),
-         (LineCollection([], colors=grey, linewidths=1.5),)),
+         (LineCollection([], colors=grey, linewidths=1.2),)),
         has_yerr=True)
-    key_handles = [error_key]
-    key_labels = [r"Mean (over seeds) $\pm$ total uncertainty (seed std$/\sqrt{n}$ $\oplus$ bootstrap std)"]
-    band_key = Rectangle((0, 0), 1, 1, facecolor=grey, edgecolor='none', alpha=0.35)
+    handles.append(error_key)
+    labels.append("Total uncertainty")
     if has_nested_error:
-        key_handles.append(band_key)
-        key_labels.append("Bootstrap std (averaged over seeds)")
-    if scratch_ref is not None:
-        key_handles.append(Line2D([], [], color=style_of[scratch_ref][1], linestyle='--', linewidth=0.9, alpha=0.7))
-        key_labels.append(f"{_pretty_model_name(scratch_ref)} level")
-    key_handles.append(Line2D([], [], linestyle='none', marker=r'$\star$', color='0.35', markersize=6))
-    key_labels.append("Best mean at each N")
-    if df['Below Zero'].any():
-        key_handles.append(Line2D([], [], linestyle='none', marker='o', markersize=6, markerfacecolor='none',
-                                  markeredgecolor=grey, markeredgewidth=1.5))
-        key_labels.append(r"$R^2 < 0$, drawn at 0 without error bar")
-    fig.canvas.draw()
-    models_bottom = to_axes.transform(models_legend.get_window_extent())[0][1]
-    ax.legend(handles=key_handles, labels=key_labels, title=f"Markers and error bars ({_seed_counts_text(df)})",
-              # At most 3 columns, so the key never grows wider than the figure.
-              loc='upper center', bbox_to_anchor=(0.5, models_bottom - 0.02), ncol=min(len(key_handles), 3), fontsize=10,
-              # A legend errorbar is drawn about a marker high by default, so the bar would hide behind the marker; a longer bar and a taller row make it show.
-              handler_map={error_key: HandlerErrorbar(yerr_size=1.1), band_key: HandlerPatch(patch_func=_vertical_band)},
-              handleheight=2.2)
+        handles.append(Rectangle((0, 0), 1, 1, facecolor=stat_grey, edgecolor='none'))
+        labels.append("Stat. uncertainty (bootstrap)")
+    ax.legend(handles=handles, labels=labels, loc='lower right', ncol=3, fontsize=8, framealpha=0.9,
+              # A legend errorbar is drawn about a marker high by default, so the bar would hide behind the marker; a longer bar shows it.
+              handler_map={error_key: HandlerErrorbar(yerr_size=0.7)})
 
+    plt.tight_layout()
     plt.savefig(save_plot_path, dpi=300, bbox_inches='tight')
     print(f"Saved scatter plot -> {save_plot_path}")
     pdf_plot_path = os.path.splitext(save_plot_path)[0] + '.pdf'

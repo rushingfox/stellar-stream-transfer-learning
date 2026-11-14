@@ -491,19 +491,26 @@ Conventions inside [src/build_results_table.py](src/build_results_table.py):
   gridlines are off, the regions get alternating shading and a boundary line, tick marks
   are removed and the labels read `N = 180`. Do not "fix" this into a log axis — the even
   spacing is deliberate and the styling exists to stop it being misread as a number line.
+- OmniLearned scratch (the val-selected lr) is the reference, so it is not a point but a
+  grey band across each size's region: the mean as a line, the total uncertainty as the
+  outer band and the bootstrap std as the inner one. DeepSets and eigenvalue regression
+  stay points. Colors are still handed out with scratch included, so none shifts.
 - Within each size the points are placed by mean R², highest on the left, across all
   categories, so each cluster reads as a ranking and a model's position differs between
   sizes; the marker shape still shows the category. The rank tables set only the legend
-  and the LaTeX table order, and break ties in R².
-- A model with mean R² below 0 (worse than predicting the test mean) is drawn as a hollow
-  marker at 0, without error bar or band, so the y-axis can start at 0; the threshold is
-  always 0, whatever `r2_ymin` is. Only the figure does this: the table and the CSV keep
-  the real value. The key then gets a hollow-marker entry saying so.
-- Both legends sit under the x-axis label, so the axes use the full figure width: the
-  Models legend in three rows (one column per category for the paper's 15 models), and
-  under it a grey key for the error bar, the bootstrap band, the dashed scratch line and
-  the star. The key's title gives the seeds per size, counted from the results (the most
-  seeds any model has at that size), so it follows `indices` without being told.
+  and the LaTeX table order, and break ties in R². There is no best-model star: the
+  leftmost point is the best.
+- A model with mean R² below 0 (worse than predicting the test mean) is drawn as its
+  usual marker at 0, without error bar or band, so the y-axis can start at 0; the
+  threshold is always 0, whatever `r2_ymin` is. Only the figure does this: the table and
+  the CSV keep the real value, and the paper's caption explains it, not the legend.
+- One legend, inside the axes in the empty lower right (below the baselines at N = 180
+  and 600), 3 columns at fontsize 8: the scratch band, every drawn model, then "Total
+  uncertainty" and "Stat. uncertainty (bootstrap)"; their definitions are in the paper's
+  caption. With 3 columns and the paper's 14 points plus those 3 entries, each column
+  holds a category group. Each x tick also gives its size's seeds, e.g. `N = 24` over
+  `(10 seeds)`, counted from the results (the most any model has at that size), so it
+  follows `indices` without being told.
 
 [src/proxy_gallery.py](src/proxy_gallery.py) writes all 16 gallery files with
 `--proxy_type all --input_raw raw_data/prog_mass_reg_dataset_10000.h5`. Vocabulary there
