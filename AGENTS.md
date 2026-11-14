@@ -26,7 +26,8 @@ split.
   (<https://github.com/ViniciusMikuni/OmniLearned>, installed `-e` from a separate local
   clone) is the workhorse for every non-baseline model and is **not** in the toml — see
   the README's Installation section.
-- **LaTeX**: every figure script sets `text.usetex=True` with Helvetica, so `latex`,
+- **LaTeX**: every figure script sets `text.usetex=True` with the Computer Modern serif
+  of the paper body, so `latex`,
   `dvipng` and `kpsewhich` must be on `PATH`. Run `module load texlive/2024` **after**
   activating the conda env (conda activation otherwise takes PATH priority). The runner
   scripts already do this in the right order. Jupyter kernels do **not** inherit

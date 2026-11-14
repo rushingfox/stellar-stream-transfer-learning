@@ -5,12 +5,12 @@ import numpy as np
 import matplotlib.pyplot as plt
 from scipy import stats
 
-# Paper style: LaTeX text in Helvetica, as in build_results_table.py.
+# Paper style: LaTeX text in Computer Modern, the serif of the paper body, as in build_results_table.py.
 # Needs LaTeX on PATH: run `module load texlive/2024` after activating the conda env, or conda takes PATH priority.
 plt.rcParams.update({
     "text.usetex": True,
-    "font.family": "sans-serif",
-    "font.sans-serif": ["Helvetica"],
+    "font.family": "serif",
+    "font.serif": ["Computer Modern Roman"],
 })
 
 def parse_args():

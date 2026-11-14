@@ -23,12 +23,12 @@ import numpy as np
 import matplotlib.pyplot as plt
 from mpl_toolkits.mplot3d import Axes3D  # noqa: F401  (registers 3d projection)
 
-# Paper style: LaTeX text in Helvetica, as in build_results_table.py.
+# Paper style: LaTeX text in Computer Modern, the serif of the paper body, as in build_results_table.py.
 # Needs LaTeX on PATH: run `module load texlive/2024` after activating the conda env, or conda takes PATH priority.
 plt.rcParams.update({
     "text.usetex": True,
-    "font.family": "sans-serif",
-    "font.sans-serif": ["Helvetica"],
+    "font.family": "serif",
+    "font.serif": ["Computer Modern Roman"],
 })
 
 # Proxy names in the gallery suptitles (make_gallery draws none for eigen).

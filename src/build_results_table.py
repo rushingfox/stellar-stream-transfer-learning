@@ -16,12 +16,12 @@ from exp_paths import DEFAULT_TASK, dataset_key, get_run_dir
 
 sns.set_theme(style="whitegrid")
 
-# Paper style: LaTeX text in Helvetica.
+# Paper style: LaTeX text in Computer Modern, the serif of the paper body.
 # Needs LaTeX on PATH: run `module load texlive/2024` after activating the conda env, or conda takes PATH priority.
 plt.rcParams.update({
     "text.usetex": True,
-    "font.family": "sans-serif",
-    "font.sans-serif": ["Helvetica"],
+    "font.family": "serif",
+    "font.serif": ["Computer Modern Roman"],
 })
 
 
