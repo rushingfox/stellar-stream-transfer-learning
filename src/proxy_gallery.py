@@ -13,7 +13,8 @@ Output files (under --output_dir):
     gallery_bounded_ellipsoid_a.png     proxy_bounded_ellipsoid_a        - target = $a$
     gallery_box_a.png                   proxy_box_a                      - target = $a$
     gallery_eigen.png                   proxy_stream_eigenvalues_lambda1 - target = $\sqrt{\lambda_1}$
-    gallery_combined.png                the six synthetic proxies, 2 rows (isotropic, anisotropic) x 3 columns
+    gallery_combined.png                the six synthetic proxies, 2 rows (isotropic, anisotropic) x 3 columns, plus one real stream
+                                        in a 4th column, drawn with its PCA target and with its progenitor-mass target (needs --input_raw)
 """
 import argparse
 import os
@@ -322,9 +323,12 @@ def draw_cube_length_arrow(ax, a, R, color=ACCENT):
     ax.quiver(*mid, *(-half),
               color=color, arrow_length_ratio=0.18, linewidth=2)
 
-    text_off = R @ np.array([0, 0, -a * 0.16])
-    ax.text(*(mid + text_off), 'a',
-            color=color, fontsize=11, ha='center', fontweight='bold',
+    # Straight down in world coordinates, not in the cube's own frame, so the label lands below the arrow on screen whatever the rotation.
+    # At VIEW_INIT's 20 degree elevation, world down is close to screen down, while a shift in the cube's frame can point along the line of sight and leave the label on the arrow.
+    # va='top' hangs the label below that point; the default baseline alignment would grow it upward, back onto the arrow.
+    text_off = np.array([0, 0, -a * 0.15])
+    ax.text(*(mid + text_off), '$a$',
+            color=color, fontsize=11, ha='center', va='top', fontweight='bold',
             bbox=LABEL_BBOX)
 
 
@@ -452,7 +456,7 @@ def render_ball_sample(ax, r, n_particles, rng, half_extent=None):
     # Wireframe sphere at radius r (ellipsoid_surface with equal sigmas).
     X, Y, Z = ellipsoid_surface((r, r, r), np.eye(3), scale=1.0)
     ax.plot_wireframe(X, Y, Z, color=WIREFRAME_COLOR, alpha=0.28, linewidth=0.6)
-    _draw_radius_arrow(ax, r, 'r', text_pad=2.0)
+    _draw_radius_arrow(ax, r, '$r$', text_pad=2.0)
     if half_extent is None:
         half_extent = r * 1.2
     set_equal_aspect(ax, points, half_extent=half_extent)
@@ -593,6 +597,23 @@ def render_eigen_sample(ax, points, stream_idx):
     )
 
 
+def render_target_stream(ax, points):
+    """Draws one real stream, centred, as the downstream task sees it: the point cloud alone, in the same box as render_eigen_sample.
+
+    Its target, the progenitor mass, is not a length, so there is no arrow to draw; the caller labels it in text.
+
+    Returns nothing.
+
+    `ax`: the 3D axes.
+    `points`: the stream's (n, 3) raw coordinates, in kpc.
+    """
+    pts_c = points - points.mean(axis=0)
+    ax.scatter(pts_c[:, 0], pts_c[:, 1], pts_c[:, 2], **POINT_KW)
+    set_equal_aspect(ax, pts_c, padding=1.05)
+    ax.view_init(**VIEW_INIT)
+    ax.set_xticks([]); ax.set_yticks([]); ax.set_zticks([])
+
+
 def make_gallery(proxy_type, num_samples, output_path,
                  input_raw=None, num_particles=4000, seed=0, rotated=False):
     """Draws one proxy's gallery figure, num_samples panels side by side.
@@ -712,26 +733,36 @@ def make_gallery(proxy_type, num_samples, output_path,
     print(f'Saved {output_path}, {pdf_output_path}')
 
 
-# ---------- Combined 3×2 gallery ----------
+# ---------- Combined 2×4 gallery ----------
 
-def make_combined_gallery(output_path, num_particles=4000, seed=0, rotated=True):
-    """Draws the combined publication figure, the six synthetic proxies in 2 rows (isotropic, anisotropic) x 3 columns.
+def make_combined_gallery(output_path, input_raw, stream_idx=0, num_particles=4000, seed=0, rotated=True):
+    """Draws the combined publication figure: the six synthetic proxies in 2 rows (isotropic, anisotropic) x 3 columns, and one real stream in a 4th column.
 
     Only the isotropic/anisotropic split is labelled, because it is the one with a clear performance difference.
     Each column pairs shape-analogous proxies, so the boundary type (sharp, smooth, soft) is still visible from column to column, just not annotated.
+    The 4th column shows the same stream twice: with its PCA target, as the Real-Stream PCA pretraining sees it, and with its progenitor-mass target, as the downstream task sees it.
+    Only the target differs between the two, which is exactly how the PCA pretraining data are made.
 
     Layout:
-        row 0 (Isotropic / 1D target): Cube, Bounded Ball, Gaussian Ball
-        row 1 (Anisotropic / 1D target): Box, Bounded Ellipsoid, Gaussian Ellipsoid
+        row 0 (Isotropic / 1D target): Cube, Bounded Ball, Gaussian Ball, Real-Stream PCA
+        row 1 (Anisotropic / 1D target): Box, Bounded Ellipsoid, Gaussian Ellipsoid, Target Stream
+
+    The paper includes the figure at \textwidth (5.5 in), so with the 12 in canvas every font prints at about 0.46x its size, as in the main result figure.
+    The titles and row labels match that figure's tick labels, and the in-panel labels its legend.
 
     Returns nothing; writes output_path and a PDF of the same name next to it.
 
     `output_path`: the PNG path.
-    `num_particles`: the points per sample.
+    `input_raw`: the raw HDF5 with Cartesian_data and pid (the log10 progenitor mass), for the stream column.
+    `stream_idx`: the stream's index in input_raw.
+    `num_particles`: the points per synthetic sample.
     `seed`: the seed of the sampling rng.
     `rotated`: rotate the cube and the anisotropic shapes randomly, as training does.
     """
     rng = np.random.default_rng(seed)
+    with h5py.File(input_raw, 'r') as f:
+        stream_points = np.asarray(f['Cartesian_data'][stream_idx, :, 0:3])
+        stream_log_mass = float(f['pid'][stream_idx, 0])
 
     # One curated sample per proxy (chosen to fill ~50-85% of the unified panel).
     CUBE_A        = 10.0
@@ -740,9 +771,12 @@ def make_combined_gallery(output_path, num_particles=4000, seed=0, rotated=True)
     HELL_AXES     = (10.0, 5.0, 2.0)
     GBALL_SIGMA   = 5.0    # 2σ wireframe ≈ 10
     GELL_SIGMAS   = (10.0, 5.0, 2.0)  # 2σ: 20/10/4 — within training range
-    HALF_EXTENT   = 22.0   # shared bounding-box half-width of every panel, in the proxies' unitless coordinates
+    HALF_EXTENT   = 22.0   # shared bounding-box half-width of every synthetic panel, in the proxies' unitless coordinates
 
-    ARROW_COLOR = '#555555'
+    TITLE_FS = 19   # panel titles and row labels, as the main result figure's tick labels
+    LABEL_FS = 16   # labels inside the panels, as the main result figure's legend
+    # Enlarges each 3D box inside its axes, so the panels sit closer together; the data range of each box is unchanged.
+    BOX_ZOOM = 1.18
     PANEL_NAMES = {
         'cube':                     'Cube',
         'box_a':                    'Box',
@@ -750,18 +784,22 @@ def make_combined_gallery(output_path, num_particles=4000, seed=0, rotated=True)
         'bounded_ellipsoid_a':      'Bounded Ellipsoid',
         'gaussian_ball':            'Gaussian Ball',
         'gaussian_ellipsoid_sigmax': 'Gaussian Ellipsoid',
+        'stream_pca':               'Real-Stream PCA',
+        'stream_target':            'Target Stream',
     }
     # All six proxies are 1-target: in the isotropic row the target sets the whole shape, in the anisotropic row it is one of three axes and the other two are muted.
+    # The row labels describe the synthetic columns only; the stream column is set apart by a line.
     ROW_LABELS  = ['1D target\nIsotropic', '1D target\nAnisotropic']
-    GRID = [('cube',  'bounded_ball',          'gaussian_ball'),
-            ('box_a', 'bounded_ellipsoid_a',   'gaussian_ellipsoid_sigmax')]
+    GRID = [('cube',  'bounded_ball',          'gaussian_ball',             'stream_pca'),
+            ('box_a', 'bounded_ellipsoid_a',   'gaussian_ellipsoid_sigmax', 'stream_target')]
 
-    fig = plt.figure(figsize=(14, 8))
-    gs  = fig.add_gridspec(2, 3, hspace=0.25, wspace=0.05,
-                           left=0.14, right=0.97, top=0.92, bottom=0.05)
+    fig = plt.figure(figsize=(12, 6.4))
+    # A narrow empty column before the stream column holds the separating line, and room for labels that reach past the last synthetic panel.
+    gs  = fig.add_gridspec(2, 5, width_ratios=(1, 1, 1, 0.12, 1), hspace=0.12, wspace=0.0,
+                           left=0.12, right=0.995, top=0.93, bottom=0.01)
 
     axes = [[fig.add_subplot(gs[r, c], projection='3d')
-             for c in range(3)] for r in range(2)]
+             for c in (0, 1, 2, 4)] for r in range(2)]
 
     render_fns = {
         'cube':          lambda ax: render_cube_sample(
@@ -782,31 +820,41 @@ def make_combined_gallery(output_path, num_particles=4000, seed=0, rotated=True)
         'gaussian_ellipsoid_sigmax': lambda ax: render_ellipsoid_sample(
                              ax, GELL_SIGMAS, num_particles, rng,
                              rotated=rotated, half_extent=HALF_EXTENT),
+        'stream_pca':    lambda ax: render_eigen_sample(ax, stream_points, stream_idx),
+        'stream_target': lambda ax: render_target_stream(ax, stream_points),
     }
-
     for row, row_types in enumerate(GRID):
         for col, ptype in enumerate(row_types):
             ax = axes[row][col]
             render_fns[ptype](ax)
-            ax.set_title(PANEL_NAMES[ptype], fontsize=13, fontweight='bold', pad=4)
+            # The render functions title each panel with its values, as the per-proxy galleries do; here the name replaces it.
+            ax.set_title(PANEL_NAMES[ptype], fontsize=TITLE_FS, fontweight='bold', pad=0)
+            # In every panel the target is the accent-colored label and the muted labels name the other axes.
+            # At this font size the muted labels pile up on each other, so only the target is labelled, as render_eigen_sample already does; the muted arrows stay, for the shape.
+            # The remaining labels are drawn at the per-proxy galleries' size, so they are raised here.
+            for text in list(ax.texts):
+                if text.get_color() == MUTED_AXIS_COLOR:
+                    text.remove()
+                else:
+                    text.set_fontsize(LABEL_FS)
+            ax.set_box_aspect((1, 1, 1), zoom=BOX_ZOOM)
+            # A transparent background, so a label reaching past its panel is not hidden under the next one.
+            ax.patch.set_visible(False)
+
+    # The progenitor mass is not a length, so the target stream has no arrow; its target is written in the accent color instead, with its value, since the stream is real data with units.
+    axes[1][3].text2D(0.5, 0.97, rf'$\log_{{10}}(M_\star / M_\odot) = {stream_log_mass:.2f}$',
+                      transform=axes[1][3].transAxes, ha='center', va='top', fontsize=LABEL_FS, color=ACCENT)
 
     # --- Row labels (left margin) ---
     for row, label in enumerate(ROW_LABELS):
         ax_pos = axes[row][0].get_position()
-        fig.text(0.13, ax_pos.y0 + ax_pos.height / 2,
+        fig.text(ax_pos.x0 - 0.005, ax_pos.y0 + ax_pos.height / 2,
                  label, ha='right', va='center',
-                 fontsize=12, fontweight='bold', multialignment='center')
+                 fontsize=TITLE_FS, fontweight='bold', multialignment='center')
 
-    # --- Vertical arrow: Increasing Anisotropy (left) ---
-    ax_varrow = fig.add_axes([0.03, 0.05, 0.015, 0.82])
-    ax_varrow.set_xlim(0, 1); ax_varrow.set_ylim(0, 1); ax_varrow.axis('off')
-    ax_varrow.annotate('', xy=(0.5, 0.0), xytext=(0.5, 1.0),
-                       xycoords='axes fraction', textcoords='axes fraction',
-                       arrowprops=dict(arrowstyle='->', color=ARROW_COLOR,
-                                       lw=1.8, mutation_scale=14))
-    fig.text(0.015, 0.46, 'Increasing Anisotropy',
-             ha='center', va='center', fontsize=11, rotation=90,
-             color=ARROW_COLOR, fontweight='bold')
+    # --- Line setting the real-stream column apart from the synthetic ones ---
+    x_sep = (axes[0][2].get_position().x1 + axes[0][3].get_position().x0) / 2
+    fig.add_artist(plt.Line2D([x_sep, x_sep], [0.03, 0.97], color='0.6', linewidth=1.2))
 
     plt.savefig(output_path, dpi=300, bbox_inches='tight')
     pdf_output_path = os.path.splitext(output_path)[0] + '.pdf'
@@ -859,16 +907,17 @@ def main():
 
     for t in types:
         out = os.path.join(args.output_dir, f'gallery_{t}.png')
+        if t in ('eigen', 'combined') and args.input_raw is None:
+            print(f"[skip] {t}: --input_raw not provided")
+            continue
         if t == 'combined':
             make_combined_gallery(
                 output_path=out,
+                input_raw=args.input_raw,
                 num_particles=args.num_particles,
                 seed=args.seed,
                 rotated=args.rotated,
             )
-            continue
-        if t == 'eigen' and args.input_raw is None:
-            print(f"[skip] {t}: --input_raw not provided")
             continue
         make_gallery(
             t,

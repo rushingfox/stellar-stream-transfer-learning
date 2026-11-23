@@ -453,16 +453,18 @@ come from its `_FIGURE_RUNS`, which must match the notebook's `indices`.
 
 [evaluation/reproduce_main_figure.ipynb](evaluation/reproduce_main_figure.ipynb) is the one
 place the paper's figures and table are made. Run top to bottom, it writes into
-`evaluation/` the main figure, the appendix LaTeX table and the CSV. It needs **no raw data**: it reads each run's `shared_test10000/bootstrap.csv` in the
+`evaluation/` the main figure, the appendix LaTeX table, the CSV and the two residual
+figures. It needs **no raw data**: it reads each run's `shared_test10000/bootstrap.csv` in the
 result folders (from the result archive) and the sidecar
-`evaluation/prog_mass_labels_10000_test.npy` for `Var(y_test)`. Its settings are the
+`evaluation/prog_mass_labels_10000_test.npy` for `Var(y_test)`; only the two residual
+figures also read predictions (see their bullet below). Its settings are the
 paper's: R², seeds 0–9 at N = 24 and 60 and 0–2 at N = 180 and 600 (`indices`, a
 {dataset size: runs} dict; the training-free `eigenvalue_regression` has only `run_0`),
 a y-axis from 0 to 1 (`r2_ymin`, 0 by default), and nested error bars (`combine_errors=True`
 with `error_column="Test_Loss_Bootstrap_Std"`: outer = seed s.e.m. ⊕ mean bootstrap std,
 where the seed term is the sample std over seeds / √n and the bootstrap term is not
 divided by √n, because every seed is scored on the same test set and its sampling error
-does not average out; inner band = mean bootstrap std). `build_results_table.py` makes only these R² outputs and has no command
+does not average out; inner band = mean bootstrap std). `build_results_table.py` makes only these outputs and has no command
 line; to look at numbers in the terminal, use [src/print_r2.py](src/print_r2.py).
 
 Conventions inside [src/build_results_table.py](src/build_results_table.py):
@@ -505,18 +507,46 @@ Conventions inside [src/build_results_table.py](src/build_results_table.py):
   usual marker at 0, without error bar or band, so the y-axis can start at 0; the
   threshold is always 0, whatever `r2_ymin` is. Only the figure does this: the table and
   the CSV keep the real value, and the paper's caption explains it, not the legend.
-- One legend, inside the axes in the empty lower right (below the baselines at N = 180
-  and 600), 3 columns at fontsize 8: the scratch band, every drawn model, then "Total
-  uncertainty" and "Stat. uncertainty (bootstrap)"; their definitions are in the paper's
-  caption. With 3 columns and the paper's 14 points plus those 3 entries, each column
-  holds a category group. Each x tick also gives its size's seeds, e.g. `N = 24` over
-  `(10 seeds)`, counted from the results (the most any model has at that size), so it
-  follows `indices` without being told.
+- The canvas is 12×8 in, and the paper scales it to `\textwidth` (5.5 in), so every
+  font prints at about 0.46× its size; the sizes were raised for that (legend 16, ticks
+  18–19, axis labels 22). The extra height is there to make room for the legend.
+- One legend, inside the axes in the empty lower part of N = 60 to 600, 3 columns at
+  fontsize 16 with tight spacing: the scratch band, every drawn model, then "Total uncertainty" and "Stat.
+  uncertainty (bootstrap)"; their definitions are in the paper's caption. Its bottom sits
+  just above the DeepSets marker drawn at 0 at N = 60, its top just below the
+  baselines at N = 180, and its left edge just right of the Bounded Ball error bar at N = 24, so it is at its size limit: a larger font or a new entry needs a
+  rendered check. With 3 columns and the paper's 14 points plus those 3 entries, each
+  column holds a category group. Each x tick also gives its size's seeds, e.g. `N = 24`
+  over `(10 seeds)`, counted from the results (the most any model has at that size), so
+  it follows `indices` without being told.
+- Two residual figures share `residual_models` and `residual_sizes`: the relative-error
+  figure (`save_residual`) and the log-residual figure (`save_log_residual`). Each has one
+  panel per size and plots, against the true log mass, either the relative error of the
+  mass itself, (M_pred − M_true) / M_true = 10^(y_pred − y_true) − 1, in percent, or the
+  log residual y_pred − y_true, in dex. The first is asymmetric (bounded below by −100%,
+  unbounded above), so a symmetric dex error looks larger above 0; the second is the
+  quantity the MSE is computed on. Dividing the log residual by log10 M_true was rejected,
+  because its value depends on the mass unit. Per model each figure pools every
+  seed of `indices` (10 × 2,000 predictions at N = 24 and 60), bins them in 9 equal-width
+  true-mass bins over the test set's range, and draws the median as a line and the 16th–84th
+  percentiles as a band. A swept model is named by its base name (`OmniLearned_Scratch`)
+  and takes the lr the main figure shows; colors and markers come from the main figure,
+  with scratch in the grey of its band and the baseline circle. It reads each run's shared-test predictions through
+  `compute_bootstrap_shared_test.load_predictions` (OmniLearned's are z-scored and mapped
+  back with the size's `target_stats.npz`) and raises if any run has none.
 
 [src/proxy_gallery.py](src/proxy_gallery.py) writes all 16 gallery files with
 `--proxy_type all --input_raw raw_data/prog_mass_reg_dataset_10000.h5`. Vocabulary there
 is **"target"**, never "label" — this is regression, and the repo (`target_columns`,
 `--target_model`) and the paper both use "target".
+The paper's `gallery_combined` is 2 rows × 4 columns: the six synthetic proxies, and in a
+4th column, set apart by a line, one real stream (stream 0 of the size-10000 raw file)
+drawn twice, with its PCA target and with its progenitor-mass target, since the PCA
+pretraining data are those streams relabelled. So `combined`, like `eigen`, needs
+`--input_raw` and is skipped without it. Its canvas is 12 in wide, as the main result
+figure's, so the same font sizes print the same; the synthetic panels keep one shared
+data range (so their sizes compare), and only the target axis carries a label, because
+the muted axis labels pile up at this font size.
 
 After changing anything that feeds a figure, regenerate it and **look at the rendered
 output**, not just the code. Bugs that were invisible in a diff and obvious in the image

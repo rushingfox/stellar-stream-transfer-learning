@@ -12,7 +12,8 @@ from matplotlib.legend_handler import HandlerErrorbar
 from matplotlib.lines import Line2D
 from matplotlib.patches import Rectangle
 import seaborn as sns
-from exp_paths import DEFAULT_TASK, dataset_key, get_run_dir
+from compute_bootstrap_shared_test import load_predictions
+from exp_paths import DEFAULT_TASK, EVAL_DATASET_SIZE, dataset_key, get_run_dir, get_target_stats_path
 
 sns.set_theme(style="whitegrid")
 
@@ -81,6 +82,8 @@ LR_SWEEPS = {
 VAL_SELECTED_SUFFIX = '_ValLR'
 SCRATCH_MODEL = 'OmniLearned_Scratch'
 VAL_SELECTED_SCRATCH_MODEL = SCRATCH_MODEL + VAL_SELECTED_SUFFIX
+# The main figure draws OmniLearned scratch as a grey band, not in its category color, so every figure draws it in the grey of the band's mean line.
+_SCRATCH_LINE_GREY = '0.3'
 
 
 def sweep_base(name):
@@ -590,7 +593,9 @@ def generate_scatter_plot(df, save_plot_path, r2_reference_var, r2_ymin=0.0):
     df['Below Zero'] = df[y_col] < 0
     df.loc[df['Below Zero'], [y_col, error_col] + ([stat_col] if has_nested_error else [])] = 0.0
 
-    plt.figure(figsize=(12, 5.5))
+    # The paper includes the figure at \textwidth (5.5 in), so every font size below prints at about 0.46x its value.
+    # The height leaves room for the legend in the empty lower part of the axes.
+    plt.figure(figsize=(12, 8))
     ax = plt.gca()
 
     datasets = df['Dataset'].unique()
@@ -619,7 +624,7 @@ def generate_scatter_plot(df, save_plot_path, r2_reference_var, r2_ymin=0.0):
     # Fixed width of the shaded bootstrap band, about the spacing between neighbouring points (dodge_width / (points per size - 1)).
     band_width = 0.05
     # Greys of the scratch band, shared with the legend: outer band = total uncertainty, inner band = bootstrap std, line = mean.
-    total_grey, stat_grey, line_grey = '0.85', '0.68', '0.3'
+    total_grey, stat_grey, line_grey = '0.85', '0.68', _SCRATCH_LINE_GREY
 
     # One errorbar per drawn model, in legend order, for the legend.
     model_handles = []
@@ -685,7 +690,8 @@ def generate_scatter_plot(df, save_plot_path, r2_reference_var, r2_ymin=0.0):
     seeds = _seed_counts(df)
     plt.xticks(range(len(datasets)),
                [f"N = {_pretty_dataset_label(d)}\n({seeds[d]} seed{'s' if seeds[d] > 1 else ''})" for d in datasets],
-               fontsize=12, fontweight='bold')
+               fontsize=19, fontweight='bold')
+    ax.tick_params(axis='y', labelsize=18)
 
     # The dataset sizes are categories, drawn evenly spaced although their ratios differ.
     # So the x-axis must not look like a number line: no vertical gridlines (they would run through each cluster) and no tick marks, but a boundary line between sizes and alternating shading.
@@ -700,12 +706,13 @@ def generate_scatter_plot(df, save_plot_path, r2_reference_var, r2_ymin=0.0):
         if i < len(datasets) - 1:
             ax.axvline(i + 0.5, color='0.75', linewidth=1.0, zorder=0)
 
-    plt.xlabel("Fine-Tuning dataset size", fontsize=14, fontweight='bold')
-    plt.ylabel("Test R²", fontsize=14, fontweight='bold')
+    plt.xlabel("Fine-Tuning dataset size", fontsize=22, fontweight='bold')
+    plt.ylabel("Test R²", fontsize=22, fontweight='bold')
     # R^2 cannot exceed 1, so the axis ends there.
     plt.ylim(bottom=r2_ymin, top=1.0)
 
-    # One legend inside the axes, in the empty lower right (below the baselines at the two largest sizes).
+    # One legend inside the axes, in the empty lower part of the three largest sizes.
+    # Its bottom sits just above the markers drawn at R^2 = 0, and its top below the baselines at N = 180.
     # It lists the scratch band, every drawn model and the two uncertainties, which the paper's caption defines.
     handles, labels = [], []
     if scratch_ref is not None:
@@ -728,7 +735,8 @@ def generate_scatter_plot(df, save_plot_path, r2_reference_var, r2_ymin=0.0):
     if has_nested_error:
         handles.append(Rectangle((0, 0), 1, 1, facecolor=stat_grey, edgecolor='none'))
         labels.append("Stat. uncertainty (bootstrap)")
-    ax.legend(handles=handles, labels=labels, loc='lower right', ncol=3, fontsize=8, framealpha=0.9,
+    ax.legend(handles=handles, labels=labels, loc='lower right', bbox_to_anchor=(0.997, 0.04), borderaxespad=0,
+              ncol=3, fontsize=16, framealpha=0.9, labelspacing=0.25, columnspacing=0.6, handlelength=1.3, handletextpad=0.5, borderpad=0.3,
               # A legend errorbar is drawn about a marker high by default, so the bar would hide behind the marker; a longer bar shows it.
               handler_map={error_key: HandlerErrorbar(yerr_size=0.7)})
 
@@ -739,6 +747,92 @@ def generate_scatter_plot(df, save_plot_path, r2_reference_var, r2_ymin=0.0):
     plt.savefig(pdf_plot_path, dpi=300, bbox_inches='tight')
     print(f"Saved scatter plot -> {pdf_plot_path}")
     plt.close()
+
+
+def load_pooled_predictions(repo_root, target_columns, dataset_size, target_model, run_idxs, task=DEFAULT_TASK):
+    """Loads the shared-test predictions of several runs of one model and stacks them.
+
+    Returns (prediction, truth), 1-D arrays in raw target units, len(run_idxs) * 2,000 long; raises FileNotFoundError naming every run without predictions, so a missing seed never shrinks the pool silently.
+
+    `repo_root`, `target_columns`, `dataset_size`, `target_model`, `task`: locate the model folder, as in get_run_dir.
+    `run_idxs`: the runs (seeds) to stack.
+    """
+    stats_path = get_target_stats_path(repo_root, target_columns, dataset_size, task)
+    preds, truths, missing = [], [], []
+    for idx in run_idxs:
+        run_dir = get_run_dir(repo_root, target_columns, dataset_size, target_model, idx, task)
+        loaded = load_predictions(run_dir, EVAL_DATASET_SIZE, stats_path)
+        if loaded is None:
+            missing.append(str(run_dir))
+            continue
+        preds.append(loaded[0])
+        truths.append(loaded[1])
+    if missing:
+        raise FileNotFoundError("No shared-test predictions in: " + ", ".join(missing))
+    return np.concatenate(preds), np.concatenate(truths)
+
+
+def _binned_percentiles(x, values, edges, percentiles=(16, 50, 84)):
+    """Percentiles of values in each bin of x, as an array of shape (len(percentiles), n_bins); the last bin includes its right edge."""
+    bins = np.clip(np.searchsorted(edges, x, side='right') - 1, 0, len(edges) - 2)
+    return np.array([np.percentile(values[bins == b], percentiles) for b in range(len(edges) - 1)]).T
+
+
+# The two residuals generate_residual_plot can draw, from the log residual d = y_pred - y_true: (values from d, y-axis label).
+# The target y is log10 of the stellar mass, so the relative error of the mass itself is (M_pred - M_true) / M_true = 10^d - 1, in percent here.
+# It is asymmetric, bounded below by -100% and unbounded above, so a symmetric error in d looks larger above 0 than below.
+# The log residual d itself, in dex, is the quantity the MSE is computed on, and is symmetric.
+_RESIDUAL_QUANTITIES = {
+    'relative': (lambda d: 100 * (10 ** d - 1), r"$(M_{\rm pred} - M_{\rm true}) / M_{\rm true}$ [\%]"),
+    'log':      (lambda d: d, r"$\log_{10} M_{\rm pred} - \log_{10} M_{\rm true}$ [dex]"),
+}
+
+
+def generate_residual_plot(panels, save_plot_path, quantity='relative', n_bins=9):
+    """Draws a residual of a few models on the shared test set against the true mass, one panel per dataset size, as PNG and PDF.
+
+    Returns nothing.
+
+    Each panel pools every seed's prediction of every test stream and bins them by true mass, in n_bins equal-width bins over the test set's range.
+    Per model it draws the median residual as a line and its 16th to 84th percentiles as a band.
+    Both quantities are monotonic in y_pred - y_true, so the medians of the two figures are the same streams, transformed.
+
+    `panels`: [(title, [(label, color, marker, prediction, truth), ...]), ...], top to bottom, models in legend order; marker None draws the line alone.
+    `save_plot_path`: the PNG path; the PDF goes next to it under the same name.
+    `quantity`: 'relative' for the relative mass error in percent, 'log' for the log residual in dex (see _RESIDUAL_QUANTITIES).
+    `n_bins`: the number of mass bins.
+    """
+    transform, ylabel = _RESIDUAL_QUANTITIES[quantity]
+    # Every model is scored on the same test set, so one set of edges serves every panel.
+    all_truth = np.concatenate([truth for _, models in panels for *_, truth in models])
+    edges = np.linspace(all_truth.min(), all_truth.max(), n_bins + 1)
+    centers = (edges[:-1] + edges[1:]) / 2
+
+    fig, axes = plt.subplots(len(panels), 1, figsize=(8, 3.6 * len(panels)), sharex=True, sharey=True, squeeze=False)
+    for ax, (title, models) in zip(axes[:, 0], panels):
+        ax.axhline(0.0, color='0.4', linestyle='--', linewidth=1.0, zorder=1)
+        for label, color, marker, prediction, truth in models:
+            p16, p50, p84 = _binned_percentiles(truth, transform(prediction - truth), edges)
+            ax.fill_between(centers, p16, p84, color=color, alpha=0.2, linewidth=0, zorder=2)
+            ax.plot(centers, p50, color=color, linewidth=2, zorder=3, label=label,
+                    **({} if marker is None else dict(marker=marker, markersize=6,
+                                                      markeredgecolor='black', markeredgewidth=0.5)))
+        ax.set_title(title, fontsize=15)
+        ax.set_ylabel(ylabel, fontsize=15)
+        ax.tick_params(labelsize=13)
+    axes[-1, 0].set_xlabel(r"$\log_{10}(M_{\rm true} / M_\odot)$", fontsize=15)
+    # One legend in a row above the panels, since the wide bands leave no empty corner inside them.
+    handles, labels = axes[0, 0].get_legend_handles_labels()
+    fig.legend(handles, labels, loc='upper center', bbox_to_anchor=(0.5, 1.0), ncol=len(labels), fontsize=13,
+               frameon=False)
+
+    plt.tight_layout(rect=(0, 0, 1, 0.95))
+    plt.savefig(save_plot_path, dpi=300, bbox_inches='tight')
+    print(f"Saved residual plot -> {save_plot_path}")
+    pdf_plot_path = os.path.splitext(save_plot_path)[0] + '.pdf'
+    plt.savefig(pdf_plot_path, dpi=300, bbox_inches='tight')
+    print(f"Saved residual plot -> {pdf_plot_path}")
+    plt.close(fig)
 
 
 def generate_latex_table(df, r2_reference_var, save_path=None, selected_lr=None):
@@ -843,8 +937,68 @@ def generate_latex_table(df, r2_reference_var, save_path=None, selected_lr=None)
 _SINGLE_RUN_MODELS = {"eigenvalue_regression", "average"}
 
 
-def build_table(model_list, repo_root, epochs, indices, r2_reference_var, save_csv=None, save_scatter=None, save_latex=None, return_table_frames=False, test_csv_name="results/loss_history.csv", r2_ymin=0.0, error_column=None, combine_errors=False, task=DEFAULT_TASK):
-    """Builds the CSV, the main figure and the appendix table from a list of models; the notebook's entry point.
+def _residual_panels(model_list, residual_models, residual_sizes, scatter_models, selected_lr, fallback_rows,
+                     requested, repo_root, indices, task):
+    """Collects the residual figure's data: for each size, each requested model's pooled predictions at the main figure's runs, with its main-figure label and color.
+
+    Returns generate_residual_plot's panels; raises ValueError for a model or size the main figure does not show, and FileNotFoundError for a run without predictions.
+
+    A swept model (LR_SWEEPS) is asked for by its base name and takes the lr that the main figure shows at that size.
+    OmniLearned scratch is drawn in the grey of its band in the main figure, with the baseline marker, and every other model in its main-figure color and marker.
+
+    `model_list`: build_table's list of (target_columns, dataset_size, folder name, display name).
+    `residual_models`: the display names to draw, in legend order, e.g. ['OmniLearned_Scratch', 'OmniCosmos_Quijote'].
+    `residual_sizes`: the dataset sizes, one panel each, top to bottom, e.g. [40, 100].
+    `scatter_models`: the main figure's Model_Names, for its colors.
+    `selected_lr`, `fallback_rows`: from select_sweep_lr, for the lr each swept model shows.
+    `requested`: from requested_sweeps.
+    `repo_root`, `indices`, `task`: as in build_table.
+    """
+    styles = {m: (marker, color) for m, marker, color in build_model_styles(scatter_models)}
+    folder_of = {(size, display or folder): (target_columns, folder)
+                 for target_columns, size, folder, display in model_list}
+    fallback = {(r["Dataset"], sweep_base(r["Model_Name"][:-len(VAL_SELECTED_SUFFIX)])) for r in fallback_rows}
+
+    panels = []
+    for size in residual_sizes:
+        columns = {target_columns for target_columns, s, _, _ in model_list if s == size}
+        if len(columns) != 1:
+            raise ValueError(f"Residual figure: N = {size} needs exactly one target_columns in model_list, found {sorted(columns)}")
+        ds_key = dataset_key(columns.pop(), size, task)
+
+        models, n_seeds = [], 0
+        for name in residual_models:
+            base = sweep_base(name)
+            # A swept model shows one lr per size in the main figure: the val-selected one, or the default while the sweep is unfinished.
+            if base is not None and len(requested.get((ds_key, base), ())) > 1:
+                scatter_name = base + VAL_SELECTED_SUFFIX
+                chosen = selected_lr.get((ds_key, base))
+                if chosen is None and (ds_key, base) in fallback:
+                    chosen = next(n for n in requested[(ds_key, base)] if _is_default_lr(n, base))
+            else:
+                scatter_name = chosen = name
+            if chosen is None or scatter_name not in styles or (size, chosen) not in folder_of:
+                raise ValueError(f"Residual figure: {name} has no point in the main figure at N = {_pretty_dataset_label(ds_key)}")
+
+            target_columns, folder = folder_of[(size, chosen)]
+            ds_indices = indices[size] if isinstance(indices, dict) else indices
+            run_idxs = [0] if folder.lower() in _SINGLE_RUN_MODELS else list(ds_indices)
+            prediction, truth = load_pooled_predictions(repo_root, target_columns, size, folder, run_idxs, task)
+            n_seeds = max(n_seeds, len(run_idxs))
+
+            if scatter_name in (VAL_SELECTED_SCRATCH_MODEL, SCRATCH_MODEL):
+                marker, color = _CATEGORY_STYLE['baseline']['marker'], _SCRATCH_LINE_GREY
+            else:
+                marker, color = styles[scatter_name]
+            models.append((_pretty_model_name(scatter_name), color, marker, prediction, truth))
+
+        panels.append((f"N = {_pretty_dataset_label(ds_key)} ({n_seeds} seed{'s' if n_seeds > 1 else ''})", models))
+    return panels
+
+
+def build_table(model_list, repo_root, epochs, indices, r2_reference_var, save_csv=None, save_scatter=None, save_latex=None, return_table_frames=False, test_csv_name="results/loss_history.csv", r2_ymin=0.0, error_column=None, combine_errors=False, task=DEFAULT_TASK,
+                save_residual=None, save_log_residual=None, residual_models=(), residual_sizes=(40, 100), residual_bins=9):
+    """Builds the CSV, the main figure, the appendix table and optionally the residual figure from a list of models; the notebook's entry point.
 
     Returns df_out, the CSV table (empty if no run has a result); with return_table_frames, (df_out, table_df, best_mask).
 
@@ -857,7 +1011,14 @@ def build_table(model_list, repo_root, epochs, indices, r2_reference_var, save_c
     `return_table_frames`: also return the table as DataFrames, for showing it in the notebook.
     `test_csv_name`, `error_column`, `combine_errors`, `task`: passed to summarize_model.
     `r2_ymin`: the bottom of the figure's y-axis.
+    `save_residual`: the PNG path of the relative mass error figure, in percent (see generate_residual_plot); None skips it.
+    `save_log_residual`: the PNG path of the log residual figure, in dex; None skips it.
+    `residual_models`: the two residual figures' models, by display name, in legend order; a swept model by its base name, e.g. 'OmniLearned_Scratch', takes the lr the main figure shows.
+    `residual_sizes`: their dataset sizes, one panel each, top to bottom.
+    `residual_bins`: their number of equal-width true-mass bins.
     """
+    if (save_residual or save_log_residual) and not residual_models:
+        raise ValueError("save_residual and save_log_residual need residual_models")
     display_rows = []
     plot_rows = []
     n_required = {}
@@ -927,6 +1088,17 @@ def build_table(model_list, repo_root, epochs, indices, r2_reference_var, save_c
     if save_scatter:
         generate_scatter_plot(pd.DataFrame(scatter_rows), save_scatter, r2_reference_var,
                               r2_ymin=r2_ymin)
+
+    # Residual figures: relative mass error and log residual against true mass for a few models, pooled over the main figure's runs.
+    # Both read the same predictions, which are loaded once.
+    if save_residual or save_log_residual:
+        panels = _residual_panels(model_list, residual_models, residual_sizes,
+                                  {r["Model_Name"] for r in scatter_rows}, selected_lr, fallback_rows,
+                                  requested, repo_root, indices, task)
+        if save_residual:
+            generate_residual_plot(panels, save_residual, quantity='relative', n_bins=residual_bins)
+        if save_log_residual:
+            generate_residual_plot(panels, save_log_residual, quantity='log', n_bins=residual_bins)
 
     # In case the notebook wants to display the table, return the DataFrame and the best-mask DataFrame as well.
     if return_table_frames:
