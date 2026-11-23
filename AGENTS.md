@@ -80,9 +80,18 @@ e.g. `prog_mass_3d_x_y_z_300/omnilearned_scratch/run_0/`.
   `get_loss_history_csv_path`, …) are the canonical way to construct paths — use them
   rather than f-strings.
 - `.gitignore` ignores every experiment folder (`3d_*/ prog_mass_*/ subhalo_*/`)
-  wholesale: data, checkpoints and per-run results are not tracked. They are
-  distributed as a separate archive with the same folder layout, to be unpacked at the
-  repo root.
+  wholesale: data, checkpoints and per-run results are not tracked as files. The
+  per-run results the figure notebook needs are tracked instead as one archive,
+  `results_archive.tar.gz` at the repo root (about 16 MB), with the same folder layout,
+  so `tar -xzf results_archive.tar.gz` at the repo root puts them in place. Being in git,
+  it always matches the notebook of the same commit.
+  [scripts/make_results_archive.sh](scripts/make_results_archive.sh) builds it from the
+  four downstream sizes: every run's `.csv`, `.npz`, `.json` and `invocation.txt`, plus
+  each size's `data/streams/target_stats.npz` and `input_stats.npz`. Checkpoints (about
+  25 GB), training data, per-run plots, logs and the subhalo task stay out. The archive is
+  deterministic, so repacking unchanged results gives a byte-identical file. **Whenever
+  results change, rerun the script and commit the archive with the code**; each new
+  version adds a full copy to the git history, so repack only when results have settled.
 - Tracked top-level dirs: `src/`, `scripts/`, `evaluation/`, `visualization/`,
   `proxy_gallery/`. Raw data (`raw_data*/`) and all
   model weights (`*.pt`, `*.pth`, `*.h5`) are **never** committed. The one exception is
@@ -306,8 +315,8 @@ The most coupled piece in the repo:
    OmniLearned runner reads it via `--path ../../data`.
 
 **Adding a new proxy** touches: [src/prepare_data.py](src/prepare_data.py) (synthesis
-branch + argparse choices), [src/proxy_gallery.py](src/proxy_gallery.py) (visualisation +
-`_PROXY_DISPLAY_NAMES` + `_TARGET_DESCRIPTIONS`),
+branch + argparse choices), [src/proxy_gallery.py](src/proxy_gallery.py) (a `render_*` function, a panel in
+`make_combined_gallery`'s `GRID` and `PANEL_NAMES`, if it is to appear in the paper's figure),
 [scripts/prepare_data_proxy_pretrain.sh](scripts/prepare_data_proxy_pretrain.sh),
 [scripts/prepare_data_omnilearned.sh](scripts/prepare_data_omnilearned.sh),
 [scripts/omnilearned_summary.sh](scripts/omnilearned_summary.sh),
@@ -455,7 +464,8 @@ come from its `_FIGURE_RUNS`, which must match the notebook's `indices`.
 place the paper's figures and table are made. Run top to bottom, it writes into
 `evaluation/` the main figure, the appendix LaTeX table, the CSV and the two residual
 figures. It needs **no raw data**: it reads each run's `shared_test10000/bootstrap.csv` in the
-result folders (from the result archive) and the sidecar
+result folders (from `results_archive.tar.gz`, which its first cells check has been
+extracted, so a missing extraction stops it instead of dropping every model) and the sidecar
 `evaluation/prog_mass_labels_10000_test.npy` for `Var(y_test)`; only the two residual
 figures also read predictions (see their bullet below). Its settings are the
 paper's: R², seeds 0–9 at N = 24 and 60 and 0–2 at N = 180 and 600 (`indices`, a
@@ -535,15 +545,16 @@ Conventions inside [src/build_results_table.py](src/build_results_table.py):
   `compute_bootstrap_shared_test.load_predictions` (OmniLearned's are z-scored and mapped
   back with the size's `target_stats.npz`) and raises if any run has none.
 
-[src/proxy_gallery.py](src/proxy_gallery.py) writes all 16 gallery files with
-`--proxy_type all --input_raw raw_data/prog_mass_reg_dataset_10000.h5`. Vocabulary there
-is **"target"**, never "label" — this is regression, and the repo (`target_columns`,
-`--target_model`) and the paper both use "target".
-The paper's `gallery_combined` is 2 rows × 4 columns: the six synthetic proxies, and in a
+[src/proxy_gallery.py](src/proxy_gallery.py) writes only the paper's figure,
+`proxy_gallery/gallery_combined.{png,pdf}`, with
+`--input_raw raw_data/prog_mass_reg_dataset_10000.h5` (required). The per-proxy galleries
+and `gallery_eigen` it used to write were dropped with their code, as the paper uses none of
+them. Vocabulary there is **"target"**, never "label" — this is regression, and the repo
+(`target_columns`, `--target_model`) and the paper both use "target".
+The figure is 2 rows × 4 columns: the six synthetic proxies, and in a
 4th column, set apart by a line, one real stream (stream 0 of the size-10000 raw file)
 drawn twice, with its PCA target and with its progenitor-mass target, since the PCA
-pretraining data are those streams relabelled. So `combined`, like `eigen`, needs
-`--input_raw` and is skipped without it. Its canvas is 12 in wide, as the main result
+pretraining data are those streams relabelled. Its canvas is 12 in wide, as the main result
 figure's, so the same font sizes print the same; the synthetic panels keep one shared
 data range (so their sizes compare), and only the target axis carries a label, because
 the muted axis labels pile up at this font size.

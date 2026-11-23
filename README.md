@@ -159,22 +159,21 @@ The DL models would evaluate their models on the shared test set just after the 
 
 ### The main $R^2$ comparison figure
 
-Only the $R^2$ figure (along with its zoom version) can be generated without downloading additional datasets! See [reproduce_main_figure.ipynb](evaluation/reproduce_main_figure.ipynb) for quick generation and interactive view!
+Only the $R^2$ figure can be generated without downloading additional datasets! See [reproduce_main_figure.ipynb](evaluation/reproduce_main_figure.ipynb) for quick generation and interactive view!
+
+Before running the ipynb, please extract the results archive file:
+```
+cd /path/to/Stream_Transfer_Learning
+tar -xzf results_archive.tar.gz
+```
 
 ### Gallery for geometry datasets
 
-- To generate the combined figure including the 6 geometry shapes:
+- To generate the combined figure including the 6 geometry shapes, plus one chosen simulated stream with the largest PCA scale and the progenitor mass shown respectively:
 ```
 cd /path/to/Stream_Transfer_Learning
-python src/proxy_gallery.py --proxy_type combined
+python src/proxy_gallery.py --input_raw raw_data/prog_mass_reg_dataset_10000.h5
 ```
-
-- To also generate the separate figures for 6 shapes and the stream eigenvalue dataset, along with the geometry combined figure:
-```
-cd /path/to/Stream_Transfer_Learning
-python src/proxy_gallery.py --proxy_type all --input_raw raw_data/prog_mass_reg_dataset_10000.h5
-```
---input_raw is required if the stream eigenvalue dataset is included (--proxy_type [eigen or all])
 
 ### Other visualization figures
 

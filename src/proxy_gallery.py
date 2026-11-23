@@ -1,24 +1,12 @@
-r"""Draws the gallery of the proxy pretraining tasks, one figure per proxy, each with its regression target marked.
+r"""Draws the paper's proxy gallery: the six synthetic pretraining shapes and one real stream, each with its regression target marked.
 
-Each proxy gets its own figure, so that no correspondence between proxies is implied (the cube, for example, has no analogue in real streams).
-The synthetic shapes are sampled afresh here, the same way src/prepare_data.py samples them; the eigen panels are real streams from --input_raw.
-In gaussian_ellipsoid_sigmax, bounded_ellipsoid_a, box_a and eigen the point cloud is genuinely 3D and anisotropic, but only the first (longest) axis is the target: it is drawn in the accent color, and the other two axes are muted, for shape context only.
-Every figure is written as PNG and as PDF.
+The synthetic shapes are sampled afresh here, the same way src/prepare_data.py samples them; the stream comes from --input_raw.
+In every panel only the target is labelled, in the accent color; in the anisotropic shapes and the stream the other two axes are muted, for shape context only.
 
-Output files (under --output_dir):
-    gallery_cube.png                    proxy_cube                       - target = $a$
-    gallery_gaussian_ellipsoid_sigmax.png proxy_gaussian_ellipsoid_sigmax - target = $\sigma_x$
-    gallery_bounded_ball.png            proxy_bounded_ball               - target = $r$
-    gallery_gaussian_ball.png           proxy_gaussian_ball              - target = $\sigma$
-    gallery_bounded_ellipsoid_a.png     proxy_bounded_ellipsoid_a        - target = $a$
-    gallery_box_a.png                   proxy_box_a                      - target = $a$
-    gallery_eigen.png                   proxy_stream_eigenvalues_lambda1 - target = $\sqrt{\lambda_1}$
-    gallery_combined.png                the six synthetic proxies, 2 rows (isotropic, anisotropic) x 3 columns, plus one real stream
-                                        in a 4th column, drawn with its PCA target and with its progenitor-mass target (needs --input_raw)
+Output (under --output_dir, as PNG and PDF): gallery_combined.png, 2 rows (isotropic, anisotropic) x 3 synthetic columns, plus a 4th column with one stream drawn with its PCA target and with its progenitor-mass target.
 """
 import argparse
 import os
-import sys
 import h5py
 import numpy as np
 import matplotlib.pyplot as plt
@@ -31,32 +19,6 @@ plt.rcParams.update({
     "font.family": "serif",
     "font.serif": ["Computer Modern Roman"],
 })
-
-# Proxy names in the gallery suptitles (make_gallery draws none for eigen).
-_PROXY_DISPLAY_NAMES = {
-    'cube':                     'proxy_cube',
-    'bounded_ball':             'proxy_bounded_ball',
-    'gaussian_ball':            'proxy_gaussian_ball',
-    'gaussian_ellipsoid_sigmax': 'proxy_gaussian_ellipsoid_sigmax',
-    'bounded_ellipsoid_a':      'proxy_bounded_ellipsoid_a',
-    'box_a':                    'proxy_box_a',
-    'eigen':                    'proxy_stream_eigenvalues_lambda1',
-}
-
-# Target in each gallery suptitle, in LaTeX.
-# For the anisotropic proxies it is the one scalar actually trained on, and the other shape parameters are named only for context.
-_TARGET_DESCRIPTIONS = {
-    'cube':                     r'$a$',
-    'bounded_ball':             r'$r$',
-    'gaussian_ball':            r'$\sigma$',
-    'gaussian_ellipsoid_sigmax': r'$\sigma_x$ (shape also has $\sigma_y,\sigma_z$)',
-    'bounded_ellipsoid_a':      r'$a$ (shape also has $b,c$)',
-    'box_a':                    r'$a$ (shape also has $b,c$)',
-    'eigen':                    r'$\sqrt{\lambda_1}$ (shape also has $\sqrt{\lambda_2},\sqrt{\lambda_3}$)',
-}
-
-ALL_PROXY_TYPES = ['cube', 'gaussian_ellipsoid_sigmax', 'bounded_ball',
-                   'gaussian_ball', 'bounded_ellipsoid_a', 'box_a', 'eigen', 'combined']
 
 VIEW_INIT = dict(elev=20, azim=45)
 # matplotlib is pinned <3.11 (pyproject.toml), because 3.11's axes3d.depthshade_minalpha multiplies into this alpha and washes the point clouds out.
@@ -372,7 +334,7 @@ def draw_principal_axes(ax, sigmas, R, names, scale=1.0, with_values=False,
 # ---------- gallery builders ----------
 
 def render_cube_sample(ax, a, n_particles, rng, rotated=False, half_extent=None):
-    """Draws one cube sample with its wireframe edges and edge-length arrow, titled with a.
+    """Draws one cube sample with its wireframe edges and edge-length arrow.
 
     Returns nothing.
 
@@ -390,11 +352,10 @@ def render_cube_sample(ax, a, n_particles, rng, rotated=False, half_extent=None)
     set_equal_aspect(ax, points, half_extent=half_extent)
     ax.view_init(**VIEW_INIT)
     ax.set_xticks([]); ax.set_yticks([]); ax.set_zticks([])
-    ax.set_title(f'$a = {a:.2f}$', fontsize=10)
 
 
 def render_ellipsoid_sample(ax, sigmas, n_particles, rng, rotated=False, half_extent=None):
-    """Draws one Gaussian-ellipsoid sample with its 2-sigma wireframe and half-axes, titled with the target sigma_x and the two shape sigmas.
+    """Draws one Gaussian-ellipsoid sample with its 2-sigma wireframe and half-axes.
 
     The cloud is genuinely 3D and anisotropic, but only sigma_x (dim 0) is the gaussian_ellipsoid_sigmax target, so the sigma_y and sigma_z axes are muted.
 
@@ -409,7 +370,7 @@ def render_ellipsoid_sample(ax, sigmas, n_particles, rng, rotated=False, half_ex
     ax.scatter(points[:, 0], points[:, 1], points[:, 2], **POINT_KW)
     X, Y, Z = ellipsoid_surface(sigmas, R, scale=ELLIPSOID_K)
     ax.plot_wireframe(X, Y, Z, color=WIREFRAME_COLOR, alpha=0.28, linewidth=0.6)
-    # The values are in the title, so the in-plot labels carry names only and do not pile up at the origin.
+    # The in-plot labels carry names only, so they do not pile up at the origin.
     # Only sigma_x, the target, is accented; sigma_y and sigma_z are muted.
     draw_principal_axes(ax, sigmas, R,
                         names=(r'$2\sigma_x$', r'$2\sigma_y$', r'$2\sigma_z$'),
@@ -422,11 +383,6 @@ def render_ellipsoid_sample(ax, sigmas, n_particles, rng, rotated=False, half_ex
     set_equal_aspect(ax, points, half_extent=half_extent)
     ax.view_init(**VIEW_INIT)
     ax.set_xticks([]); ax.set_yticks([]); ax.set_zticks([])
-    ax.set_title(
-        rf'target: $\sigma_x = {sigmas[0]:.2f}$'
-        rf'  (shape also has $\sigma_y,\sigma_z = {sigmas[1]:.2f},\ {sigmas[2]:.2f}$)',
-        fontsize=9,
-    )
 
 
 def _draw_radius_arrow(ax, length, label, color=ACCENT, axis_dir=np.array([1.0, 0.0, 0.0]),
@@ -442,7 +398,7 @@ def _draw_radius_arrow(ax, length, label, color=ACCENT, axis_dir=np.array([1.0, 
 
 
 def render_ball_sample(ax, r, n_particles, rng, half_extent=None):
-    """Draws one bounded-ball sample with its boundary sphere and radius arrow, titled with r.
+    """Draws one bounded-ball sample with its boundary sphere and radius arrow.
 
     Returns nothing.
 
@@ -462,11 +418,10 @@ def render_ball_sample(ax, r, n_particles, rng, half_extent=None):
     set_equal_aspect(ax, points, half_extent=half_extent)
     ax.view_init(**VIEW_INIT)
     ax.set_xticks([]); ax.set_yticks([]); ax.set_zticks([])
-    ax.set_title(f'$r = {r:.2f}$', fontsize=10)
 
 
 def render_gaussian_ball_sample(ax, sigma, n_particles, rng, half_extent=None):
-    """Draws one Gaussian-ball sample with its 2-sigma sphere and radius arrow, titled with sigma.
+    """Draws one Gaussian-ball sample with its 2-sigma sphere and radius arrow.
 
     Returns nothing.
 
@@ -486,11 +441,10 @@ def render_gaussian_ball_sample(ax, sigma, n_particles, rng, half_extent=None):
     set_equal_aspect(ax, points, half_extent=half_extent)
     ax.view_init(**VIEW_INIT)
     ax.set_xticks([]); ax.set_yticks([]); ax.set_zticks([])
-    ax.set_title(rf'$\sigma = {sigma:.2f}$', fontsize=10)
 
 
 def render_hard_ellipsoid_sample(ax, semi_axes, n_particles, rng, rotated=False, half_extent=None):
-    """Draws one bounded-ellipsoid sample with its boundary wireframe and semi-axes, titled with the target a and the shape values b and c.
+    """Draws one bounded-ellipsoid sample with its boundary wireframe and semi-axes.
 
     The cloud is genuinely 3D and anisotropic, but only a (dim 0, the longest semi-axis) is the bounded_ellipsoid_a target, so the b and c axes are muted.
 
@@ -516,15 +470,10 @@ def render_hard_ellipsoid_sample(ax, semi_axes, n_particles, rng, rotated=False,
     set_equal_aspect(ax, points, half_extent=half_extent)
     ax.view_init(**VIEW_INIT)
     ax.set_xticks([]); ax.set_yticks([]); ax.set_zticks([])
-    ax.set_title(
-        rf'target: $a = {semi_axes[0]:.2f}$'
-        rf'  (shape also has $b,c = {semi_axes[1]:.2f},\ {semi_axes[2]:.2f}$)',
-        fontsize=9,
-    )
 
 
 def render_box_sample(ax, semi_edges, n_particles, rng, rotated=False, half_extent=None):
-    """Draws one box sample with its wireframe edges and semi-edges, titled with the target a and the shape values b and c.
+    """Draws one box sample with its wireframe edges and semi-edges.
 
     The cloud is genuinely 3D and anisotropic, but only a (dim 0, the longest semi-edge) is the box_a target, so the b and c axes are muted.
 
@@ -550,15 +499,10 @@ def render_box_sample(ax, semi_edges, n_particles, rng, rotated=False, half_exte
     set_equal_aspect(ax, points, half_extent=half_extent)
     ax.view_init(**VIEW_INIT)
     ax.set_xticks([]); ax.set_yticks([]); ax.set_zticks([])
-    ax.set_title(
-        rf'target: $a = {semi_edges[0]:.2f}$'
-        rf'  (shape also has $b,c = {semi_edges[1]:.2f},\ {semi_edges[2]:.2f}$)',
-        fontsize=9,
-    )
 
 
-def render_eigen_sample(ax, points, stream_idx):
-    """Draws one real stream, centred, with its PCA 2-sigma ellipsoid and principal axes, titled with the target sqrt(lambda1) and the two shape values in kpc.
+def render_eigen_sample(ax, points):
+    """Draws one real stream, centred, with its PCA 2-sigma ellipsoid and principal axes.
 
     PCA gives three eigenvalues, but only lambda1 (the largest, dim 0, since compute_pca_axes sorts descending) is the eigen proxy's target, so the lambda2 and lambda3 axes are muted.
 
@@ -566,7 +510,6 @@ def render_eigen_sample(ax, points, stream_idx):
 
     `ax`: the 3D axes.
     `points`: the stream's (n, 3) raw coordinates, in kpc.
-    `stream_idx`: the stream's index in the raw file, for the title.
     """
     sigmas, R, center = compute_pca_axes(points)
     pts_c = points - center
@@ -575,7 +518,6 @@ def render_eigen_sample(ax, points, stream_idx):
     ax.plot_wireframe(X, Y, Z, color=WIREFRAME_COLOR, alpha=0.28, linewidth=0.6)
     # Only the target axis is labelled: the lambda2 and lambda3 arrows stay, to show the shape, but without text.
     # label_pad is a multiple of the arrow vector, so on those two short arrows both labels landed near the origin and overlapped.
-    # Their values are in the panel title.
     draw_principal_axes(
         ax, sigmas, R,
         names=(r'$2\sqrt{\lambda_1}$', '', ''),
@@ -587,14 +529,6 @@ def render_eigen_sample(ax, points, stream_idx):
     set_equal_aspect(ax, pts_c, padding=1.05)
     ax.view_init(**VIEW_INIT)
     ax.set_xticks([]); ax.set_yticks([]); ax.set_zticks([])
-    # Unlike the synthetic proxies, real streams carry a unit, kpc, as in src/visualization.py.
-    # Two lines, because one line with the stream id, the target and both shape values is wider than the 4-inch panel and collides with the neighbouring title.
-    ax.set_title(
-        rf'Stream {stream_idx}' '\n'
-        rf'target: $\sqrt{{\lambda_1}} = {sigmas[0]:.2f}$ kpc'
-        rf'  (shape also has $\sqrt{{\lambda_2}},\sqrt{{\lambda_3}} = {sigmas[1]:.2f},\ {sigmas[2]:.2f}$ kpc)',
-        fontsize=9,
-    )
 
 
 def render_target_stream(ax, points):
@@ -612,125 +546,6 @@ def render_target_stream(ax, points):
     set_equal_aspect(ax, pts_c, padding=1.05)
     ax.view_init(**VIEW_INIT)
     ax.set_xticks([]); ax.set_yticks([]); ax.set_zticks([])
-
-
-def make_gallery(proxy_type, num_samples, output_path,
-                 input_raw=None, num_particles=4000, seed=0, rotated=False):
-    """Draws one proxy's gallery figure, num_samples panels side by side.
-
-    The synthetic panels share one bounding box, so their sizes compare; each eigen panel is fitted to its own stream.
-
-    Returns nothing; writes output_path and a PDF of the same name next to it.
-
-    `proxy_type`: one of ALL_PROXY_TYPES except 'combined'.
-    `num_samples`: the number of panels; the anisotropic proxies have four curated shapes, so they show at most four.
-    `output_path`: the PNG path.
-    `input_raw`: the raw HDF5 with Cartesian_data, required for 'eigen', which shows num_samples streams evenly spaced through it.
-    `num_particles`: the points per synthetic sample.
-    `seed`: the seed of the sampling rng.
-    `rotated`: rotate the cube and the anisotropic shapes randomly, as training does.
-    """
-    rng = np.random.default_rng(seed)
-
-    if proxy_type == 'cube':
-        a_values = np.linspace(15.0, 45.0, num_samples)
-        shared_half = float(a_values[-1]) / 2 * 1.15
-        fig = plt.figure(figsize=(4.0 * num_samples, 4.5))
-        for i, a in enumerate(a_values):
-            ax = fig.add_subplot(1, num_samples, i + 1, projection='3d')
-            render_cube_sample(ax, float(a), num_particles, rng,
-                               rotated=rotated, half_extent=shared_half)
-
-    elif proxy_type == 'gaussian_ellipsoid_sigmax':
-        curated_all = [
-            (25.0, 6.0, 1.5),
-            (22.0, 12.0, 1.0),
-            (10.0, 5.0, 2.0),
-            (20.0, 1.0, 0.5),
-        ]
-        curated = curated_all[:num_samples]
-        fig = plt.figure(figsize=(4.0 * len(curated), 4.5))
-        shared_half = max(max(s) for s in curated) * ELLIPSOID_K * 1.2
-        for i, sig in enumerate(curated):
-            ax = fig.add_subplot(1, len(curated), i + 1, projection='3d')
-            render_ellipsoid_sample(ax, sig, num_particles, rng,
-                                    rotated=rotated, half_extent=shared_half)
-
-    elif proxy_type == 'bounded_ball':
-        r_values = np.linspace(8.0, 25.0, num_samples)
-        shared_half = float(r_values[-1]) * 1.2
-        fig = plt.figure(figsize=(4.0 * num_samples, 4.5))
-        for i, r in enumerate(r_values):
-            ax = fig.add_subplot(1, num_samples, i + 1, projection='3d')
-            render_ball_sample(ax, float(r), num_particles, rng,
-                               half_extent=shared_half)
-
-    elif proxy_type == 'gaussian_ball':
-        sigma_values = np.linspace(8.0, 25.0, num_samples)
-        shared_half = float(sigma_values[-1]) * ELLIPSOID_K * 1.4
-        fig = plt.figure(figsize=(4.0 * num_samples, 4.5))
-        for i, s in enumerate(sigma_values):
-            ax = fig.add_subplot(1, num_samples, i + 1, projection='3d')
-            render_gaussian_ball_sample(ax, float(s), num_particles, rng,
-                                        half_extent=shared_half)
-
-    elif proxy_type == 'bounded_ellipsoid_a':
-        curated_all = [
-            (25.0, 6.0, 1.5),
-            (22.0, 12.0, 1.0),
-            (10.0, 5.0, 2.0),
-            (20.0, 1.0, 0.5),
-        ]
-        curated = curated_all[:num_samples]
-        fig = plt.figure(figsize=(4.0 * len(curated), 4.5))
-        shared_half = max(max(s) for s in curated) * 1.2
-        for i, sig in enumerate(curated):
-            ax = fig.add_subplot(1, len(curated), i + 1, projection='3d')
-            render_hard_ellipsoid_sample(ax, sig, num_particles, rng,
-                                         rotated=rotated, half_extent=shared_half)
-
-    elif proxy_type == 'box_a':
-        curated_all = [
-            (25.0, 6.0, 1.5),
-            (22.0, 12.0, 1.0),
-            (10.0, 5.0, 2.0),
-            (20.0, 1.0, 0.5),
-        ]
-        curated = curated_all[:num_samples]
-        fig = plt.figure(figsize=(4.0 * len(curated), 4.5))
-        shared_half = max(max(s) for s in curated) * 1.2
-        for i, sig in enumerate(curated):
-            ax = fig.add_subplot(1, len(curated), i + 1, projection='3d')
-            render_box_sample(ax, sig, num_particles, rng,
-                              rotated=rotated, half_extent=shared_half)
-
-    elif proxy_type == 'eigen':
-        if input_raw is None:
-            raise ValueError("eigen mode requires --input_raw")
-        with h5py.File(input_raw, 'r') as f:
-            cart = f['Cartesian_data']
-            n_streams = int(cart.shape[0])
-            indices = np.linspace(0, n_streams - 1, num_samples).astype(int)
-            fig = plt.figure(figsize=(4.0 * num_samples, 4.5))
-            for i, idx in enumerate(indices):
-                ax = fig.add_subplot(1, num_samples, i + 1, projection='3d')
-                points = np.asarray(cart[int(idx), :, 0:3])
-                render_eigen_sample(ax, points, int(idx))
-    else:
-        raise ValueError(f"unknown proxy_type: {proxy_type}")
-
-    # eigen gets no suptitle: its panel titles already give every symbol with its value, and in the paper the figure has a caption.
-    # Without the suptitle the panels can also start higher (top=0.94 instead of 0.86).
-    if proxy_type != 'eigen':
-        fig.suptitle(f"{_PROXY_DISPLAY_NAMES[proxy_type]}    "
-                     f"target: {_TARGET_DESCRIPTIONS[proxy_type]}", fontsize=14)
-    plt.tight_layout()
-    plt.subplots_adjust(top=0.86 if proxy_type != 'eigen' else 0.94)
-    plt.savefig(output_path, dpi=300, bbox_inches='tight')
-    pdf_output_path = os.path.splitext(output_path)[0] + '.pdf'
-    plt.savefig(pdf_output_path, dpi=300, bbox_inches='tight')
-    plt.close(fig)
-    print(f'Saved {output_path}, {pdf_output_path}')
 
 
 # ---------- Combined 2×4 gallery ----------
@@ -820,18 +635,17 @@ def make_combined_gallery(output_path, input_raw, stream_idx=0, num_particles=40
         'gaussian_ellipsoid_sigmax': lambda ax: render_ellipsoid_sample(
                              ax, GELL_SIGMAS, num_particles, rng,
                              rotated=rotated, half_extent=HALF_EXTENT),
-        'stream_pca':    lambda ax: render_eigen_sample(ax, stream_points, stream_idx),
+        'stream_pca':    lambda ax: render_eigen_sample(ax, stream_points),
         'stream_target': lambda ax: render_target_stream(ax, stream_points),
     }
     for row, row_types in enumerate(GRID):
         for col, ptype in enumerate(row_types):
             ax = axes[row][col]
             render_fns[ptype](ax)
-            # The render functions title each panel with its values, as the per-proxy galleries do; here the name replaces it.
             ax.set_title(PANEL_NAMES[ptype], fontsize=TITLE_FS, fontweight='bold', pad=0)
             # In every panel the target is the accent-colored label and the muted labels name the other axes.
             # At this font size the muted labels pile up on each other, so only the target is labelled, as render_eigen_sample already does; the muted arrows stay, for the shape.
-            # The remaining labels are drawn at the per-proxy galleries' size, so they are raised here.
+            # The render functions draw the labels small, so they are raised here.
             for text in list(ax.texts):
                 if text.get_color() == MUTED_AXIS_COLOR:
                     text.remove()
@@ -871,63 +685,30 @@ def parse_args():
     Returns the argparse Namespace.
     """
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument(
-        '--proxy_type', nargs='+', required=True, metavar='TYPE',
-        help=(f'One or more proxy types, or "all". '
-              f'Valid: {", ".join(ALL_PROXY_TYPES)}'),
-    )
-    ap.add_argument('--num_samples', type=int, default=2)
-    ap.add_argument('--num_particles', type=int, default=4000)
+    ap.add_argument('--input_raw', required=True,
+                    help='Raw HDF5 with Cartesian_data and pid, for the stream column, e.g. raw_data/prog_mass_reg_dataset_10000.h5.')
     ap.add_argument('--output_dir', default='proxy_gallery')
-    ap.add_argument('--input_raw', default=None,
-                    help='Required for eigen. HDF5 with Cartesian_data.')
+    ap.add_argument('--num_particles', type=int, default=4000)
     ap.add_argument('--seed', type=int, default=0)
     ap.add_argument('--rotated', action=argparse.BooleanOptionalAction, default=True,
-                    help='Apply random 3D rotation to cube/gaussian_ellipsoid_sigmax/'
-                         'bounded_ellipsoid_a/box_a (matches training data; default: rotated. '
-                         'Pass --no-rotated for axis-aligned).')
+                    help='Rotate the cube and the anisotropic shapes randomly, as training does (default: rotated; --no-rotated for axis-aligned).')
     return ap.parse_args()
 
 
 def main():
-    """Draws the figure of every requested --proxy_type into --output_dir.
+    """Draws gallery_combined into --output_dir.
 
-    Returns nothing; skips eigen when --input_raw is missing and exits on an unknown type.
+    Returns nothing.
     """
     args = parse_args()
     os.makedirs(args.output_dir, exist_ok=True)
-
-    if 'all' in args.proxy_type:
-        types = ALL_PROXY_TYPES
-    else:
-        invalid = [t for t in args.proxy_type if t not in ALL_PROXY_TYPES]
-        if invalid:
-            sys.exit(f"error: unknown proxy type(s): {invalid}. Valid: {ALL_PROXY_TYPES}")
-        types = args.proxy_type
-
-    for t in types:
-        out = os.path.join(args.output_dir, f'gallery_{t}.png')
-        if t in ('eigen', 'combined') and args.input_raw is None:
-            print(f"[skip] {t}: --input_raw not provided")
-            continue
-        if t == 'combined':
-            make_combined_gallery(
-                output_path=out,
-                input_raw=args.input_raw,
-                num_particles=args.num_particles,
-                seed=args.seed,
-                rotated=args.rotated,
-            )
-            continue
-        make_gallery(
-            t,
-            num_samples=args.num_samples,
-            output_path=out,
-            input_raw=args.input_raw,
-            num_particles=args.num_particles,
-            seed=args.seed,
-            rotated=args.rotated,
-        )
+    make_combined_gallery(
+        output_path=os.path.join(args.output_dir, 'gallery_combined.png'),
+        input_raw=args.input_raw,
+        num_particles=args.num_particles,
+        seed=args.seed,
+        rotated=args.rotated,
+    )
 
 
 if __name__ == '__main__':
