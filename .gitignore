@@ -19,8 +19,9 @@ __pycache__/
 # experiment run folders: <task>_<target_columns>_<dataset_size>/ for the
 # downstream tasks (prog_mass_, subhalo_), <target_columns>_<dataset_size>/
 # for the pretraining datasets (3d_proxy_*, 3d_x_y_z_eigenvalues_*). None of
-# their contents is tracked: data, checkpoints and per-run results are
-# distributed as a separate archive with the same folder layout.
+# their contents is tracked as files: the per-run results the figure notebook
+# needs are tracked as results_archive.tar.gz at the repo root, with the same
+# folder layout (built by scripts/make_results_archive.sh).
 3d_*/
 prog_mass_*/
 subhalo_*/
